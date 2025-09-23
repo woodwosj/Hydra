@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+import os
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,6 +20,9 @@ class HydraSettings(BaseSettings):
     chroma_persist_path: Path = Field(
         default=Path("./storage/chroma"), validation_alias="CHROMA_PERSIST_PATH"
     )
+    profile_paths: tuple[Path, ...] = Field(
+        default=(Path("profiles"),), validation_alias="HYDRA_PROFILE_PATHS"
+    )
     log_level: str = Field(default="INFO", validation_alias="HYDRA_LOG_LEVEL")
 
     @field_validator("log_level")
@@ -31,6 +35,18 @@ class HydraSettings(BaseSettings):
             )
         return normalized
 
+    @field_validator("profile_paths", mode="before")
+    @classmethod
+    def _parse_profile_paths(cls, value):
+        if value is None or value == "":
+            return (Path("profiles"),)
+        if isinstance(value, (list, tuple)):
+            return tuple(Path(str(item)) for item in value)
+        if isinstance(value, str):
+            parts = [part.strip() for part in value.split(os.pathsep) if part.strip()]
+            return tuple(Path(part) for part in parts) or (Path("profiles"),)
+        raise TypeError("HYDRA_PROFILE_PATHS must be a list of paths or a path-separated string")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> HydraSettings:
@@ -38,6 +54,7 @@ def get_settings() -> HydraSettings:
 
     settings = HydraSettings()
     settings.chroma_persist_path = settings.chroma_persist_path.expanduser().resolve()
+    settings.profile_paths = tuple(path.expanduser().resolve() for path in settings.profile_paths)
     return settings
 
 

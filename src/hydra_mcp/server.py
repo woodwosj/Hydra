@@ -11,6 +11,7 @@ from fastmcp import Context, FastMCP
 
 from . import __version__
 from .config import HydraSettings, get_settings
+from .profiles import ProfileLoadError, ProfileLoader
 
 
 def configure_logging(level: str) -> None:
@@ -26,6 +27,8 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
     """Instantiate the FastMCP server with baseline resources."""
 
     settings = settings or get_settings()
+
+    profile_loader = ProfileLoader(settings.profile_paths)
 
     server = FastMCP(
         name="Hydra MCP",
@@ -48,6 +51,14 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
     def status_resource(context: Context) -> str:
         """Return a JSON string summarizing basic runtime state."""
 
+        try:
+            profiles = profile_loader.load_all()
+            profile_ids = sorted(profiles.keys())
+            profile_error: str | None = None
+        except ProfileLoadError as exc:
+            profile_ids = []
+            profile_error = str(exc)
+
         payload = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "server_version": __version__,
@@ -55,10 +66,14 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
             "chroma_path": str(settings.chroma_persist_path),
             "codex_path": settings.codex_path,
             "codex_default_model": settings.codex_default_model,
+            "profile_count": len(profile_ids),
+            "profiles": profile_ids,
+            "profile_error": profile_error,
             "request_id": getattr(context, "request_id", None),
         }
         return json.dumps(payload)
 
+    setattr(server, "profile_loader", profile_loader)
     return server
 
 
