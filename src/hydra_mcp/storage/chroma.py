@@ -284,6 +284,38 @@ class ChromaStore:
             )
         return sessions
 
+    def replay_tasks(self) -> list[dict[str, Any]]:
+        """Reconstruct task state from persisted events."""
+
+        created_events = self.search_events(query=None, filters={"event_type": "task_created"})
+        tasks: dict[str, dict[str, Any]] = {}
+
+        for event in created_events:
+            doc = json.loads(event.document)
+            task_id = doc.get("task_id")
+            if not task_id:
+                continue
+
+            history = self.search_events(query=None, filters={"task_id": task_id})
+            latest_event = history[-1] if history else event
+            latest_doc = json.loads(latest_event.document)
+
+            tasks[task_id] = {
+                "task_id": task_id,
+                "profile_id": doc.get("profile_id"),
+                "task_brief": doc.get("task_brief"),
+                "status": latest_event.metadata.get("status")
+                or latest_doc.get("status")
+                or "pending",
+                "session_id": latest_doc.get("session_id"),
+                "context_package": doc.get("context_package", {}),
+                "metadata": doc.get("metadata", {}),
+                "created_at": event.timestamp.isoformat(),
+                "updated_at": latest_event.timestamp.isoformat(),
+            }
+
+        return list(tasks.values())
+
     def search_events(
         self,
         query: str | None = None,

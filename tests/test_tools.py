@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+import json
 
 from hydra_mcp.codex.runner import CodexExecutionResult
 from hydra_mcp.config import HydraSettings
@@ -83,7 +84,8 @@ class StubChromaStore:
         merged.setdefault("sequence", self._counter)
         merged.setdefault("timestamp", datetime.fromisoformat("2025-01-01T00:00:00+00:00").isoformat())
         merged.setdefault("session_id", session_id)
-        document = body if isinstance(body, str) else str(body)
+        merged.setdefault("event_type", event_type)
+        document = body if isinstance(body, str) else json.dumps(body)
         event = StubEvent(
             id=f"{session_id}:{self._counter}",
             session_id=session_id,
@@ -123,6 +125,86 @@ class StubChromaStore:
         if limit is not None:
             results = results[:limit]
         return results
+
+    def record_worktree(
+        self,
+        *,
+        task_id: str,
+        path: str,
+        branch: str | None,
+        status: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        payload = {
+            "task_id": task_id,
+            "path": path,
+            "branch": branch,
+            "status": status,
+        }
+        if metadata:
+            payload.update(metadata)
+        self.record_event(
+            session_id=f"worktree::{task_id}",
+            event_type="worktree_update",
+            body=payload,
+            metadata={"task_id": task_id, "status": status, "event_type": "worktree_update"},
+        )
+
+    def record_session_tracking(
+        self,
+        *,
+        session_id: str,
+        profile_id: str,
+        status: str,
+        task_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        payload = {
+            "session_id": session_id,
+            "profile_id": profile_id,
+            "task_id": task_id,
+            "status": status,
+        }
+        if metadata:
+            payload.update(metadata)
+        record_meta = {
+            "session_id": session_id,
+            "profile_id": profile_id,
+            "task_id": task_id,
+            "status": status,
+            "event_type": "session_tracking",
+        }
+        self.record_event(
+            session_id=f"session::{session_id}",
+            event_type="session_tracking",
+            body=payload,
+            metadata=record_meta,
+        )
+
+    def replay_tasks(self) -> list[dict[str, Any]]:
+        tasks: dict[str, dict[str, Any]] = {}
+        for event in self.events:
+            if event.metadata.get("event_type") != "task_created":
+                continue
+            doc = json.loads(event.document)
+            task_id = doc.get("task_id")
+            if not task_id:
+                continue
+            history = [e for e in self.events if e.metadata.get("task_id") == task_id]
+            latest = history[-1] if history else event
+            latest_doc = json.loads(latest.document) if latest.document.startswith("{") else {}
+            tasks[task_id] = {
+                "task_id": task_id,
+                "profile_id": doc.get("profile_id"),
+                "task_brief": doc.get("task_brief"),
+                "status": latest.metadata.get("status") or latest_doc.get("status", "pending"),
+                "session_id": latest_doc.get("session_id"),
+                "context_package": doc.get("context_package", {}),
+                "metadata": doc.get("metadata", {}),
+                "created_at": event.timestamp.isoformat(),
+                "updated_at": latest.timestamp.isoformat(),
+            }
+        return list(tasks.values())
 
     def record_worktree(
         self,
@@ -353,6 +435,52 @@ def test_export_session_markdown() -> None:
     export = handles.export_session.fn("generalist-1", format="markdown")  # type: ignore[attr-defined]
     assert export["format"] == "markdown"
     assert "Initial note" in export["data"]
+
+
+def test_register_tools_hydrates_tasks() -> None:
+    profile = _make_profile()
+    loader = StubProfileLoader(profile)
+    chroma = StubChromaStore()
+
+    chroma.record_event(
+        session_id="task::task-hyd-1",
+        event_type="task_created",
+        body={
+            "task_id": "task-hyd-1",
+            "status": "pending",
+            "profile_id": "generalist",
+            "task_brief": "Persist state",
+            "context_package": {"files": ["src/hydra_mcp"]},
+            "metadata": {"priority": "P0"},
+        },
+        metadata={"task_id": "task-hyd-1", "status": "pending", "event_type": "task_created"},
+    )
+
+    chroma.record_event(
+        session_id="task::task-hyd-1",
+        event_type="task_started",
+        body={
+            "task_id": "task-hyd-1",
+            "status": "running",
+            "session_id": "generalist-2025",
+        },
+        metadata={"task_id": "task-hyd-1", "status": "running", "event_type": "task_started"},
+    )
+
+    server = StubServer()
+    settings = HydraSettings()
+
+    handles = register_tools(
+        server,  # type: ignore[arg-type]
+        profiles=loader,
+        settings=settings,
+        codex_runner=None,
+        chroma_store=chroma,  # type: ignore[arg-type]
+    )
+
+    assert "task-hyd-1" in handles.tasks_state
+    assert handles.tasks_state["task-hyd-1"]["status"] == "running"
+    assert handles.tasks_state["task-hyd-1"]["session_id"] == "generalist-2025"
 
 
 def test_task_lifecycle() -> None:

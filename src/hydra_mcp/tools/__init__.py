@@ -66,6 +66,10 @@ def register_tools(
     tasks_state: dict[str, dict[str, Any]] = {}
     TASK_STATUSES = {"pending", "running", "completed", "cancelled", "failed"}
 
+    if chroma_store is not None:
+        for record in chroma_store.replay_tasks():
+            tasks_state.setdefault(record["task_id"], record)
+
     async def _spawn_agent(
         profile_id: str,
         task_brief: str,
@@ -424,7 +428,18 @@ def register_tools(
         }
         tasks_state[task_id] = task
 
-        _record_task_event(task_id, "task_created", {"status": "pending", "task_brief": task_brief})
+        _record_task_event(
+            task_id,
+            "task_created",
+            {
+                "task_id": task_id,
+                "status": "pending",
+                "profile_id": profile_id,
+                "task_brief": task_brief,
+                "context_package": task["context_package"],
+                "metadata": task["metadata"],
+            },
+        )
 
         if context is not None:
             context.logger.info("Created task", extra={"task_id": task_id, "profile_id": profile_id})
@@ -459,7 +474,12 @@ def register_tools(
         _record_task_event(
             task_id,
             "task_started",
-            {"status": "running", "session_id": task["session_id"], "flags": flags or []},
+            {
+                "task_id": task_id,
+                "status": "running",
+                "session_id": task["session_id"],
+                "flags": flags or [],
+            },
         )
 
         if chroma_store is not None:
@@ -513,7 +533,12 @@ def register_tools(
         _record_task_event(
             task_id,
             "task_completed",
-            {"status": outcome_lower, "summary": summary},
+            {
+                "task_id": task_id,
+                "status": outcome_lower,
+                "session_id": task.get("session_id"),
+                "summary": summary,
+            },
         )
 
         if chroma_store is not None and task.get("session_id"):
