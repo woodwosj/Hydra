@@ -16,6 +16,7 @@ from .codex import CodexNotFoundError, CodexRunner
 from .config import HydraSettings, get_settings
 from .profiles import ProfileLoadError, ProfileLoader
 from .storage import ChromaStore, ChromaUnavailableError
+from .tools import register_tools
 
 
 def configure_logging(level: str) -> None:
@@ -131,6 +132,14 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
             "request_id": getattr(context, "request_id", None),
         }
         return json.dumps(payload)
+
+    register_tools(
+        server,
+        profiles=profile_loader,
+        settings=settings,
+        codex_runner=codex_runner,
+        chroma_store=chroma_store,
+    )
 
     setattr(server, "profile_loader", profile_loader)
     setattr(server, "codex_runner", codex_runner)
