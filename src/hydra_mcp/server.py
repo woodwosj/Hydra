@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastmcp import Context, FastMCP
 
 from . import __version__
+from .codex import CodexNotFoundError, CodexRunner
 from .config import HydraSettings, get_settings
 from .profiles import ProfileLoadError, ProfileLoader
 
@@ -23,12 +26,44 @@ def configure_logging(level: str) -> None:
     )
 
 
+def _run_sync(coro):
+    """Execute an async coroutine on a dedicated event loop."""
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
     """Instantiate the FastMCP server with baseline resources."""
 
     settings = settings or get_settings()
 
     profile_loader = ProfileLoader(settings.profile_paths)
+
+    codex_runner: CodexRunner | None = None
+    codex_metadata = {
+        "available": False,
+        "version": None,
+        "error": None,
+    }
+
+    try:
+        codex_runner = CodexRunner(Path(settings.codex_path) if settings.codex_path else None)
+        codex_metadata["available"] = True
+        version_result = _run_sync(codex_runner.version())
+        if version_result.ok:
+            codex_metadata["version"] = version_result.stdout.strip()
+        else:
+            codex_metadata["error"] = (
+                version_result.stderr.strip()
+                or "Codex version command failed with exit code"
+            )
+    except CodexNotFoundError as exc:
+        codex_metadata["error"] = str(exc)
+        codex_runner = None
 
     server = FastMCP(
         name="Hydra MCP",
@@ -64,16 +99,23 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
             "server_version": __version__,
             "log_level": settings.log_level,
             "chroma_path": str(settings.chroma_persist_path),
-            "codex_path": settings.codex_path,
-            "codex_default_model": settings.codex_default_model,
-            "profile_count": len(profile_ids),
-            "profiles": profile_ids,
-            "profile_error": profile_error,
+            "profiles": {
+                "count": len(profile_ids),
+                "ids": profile_ids,
+                "error": profile_error,
+            },
+            "codex": {
+                "path": settings.codex_path,
+                "default_model": settings.codex_default_model,
+                **codex_metadata,
+            },
             "request_id": getattr(context, "request_id", None),
         }
         return json.dumps(payload)
 
     setattr(server, "profile_loader", profile_loader)
+    setattr(server, "codex_runner", codex_runner)
+    setattr(server, "codex_metadata", codex_metadata)
     return server
 
 
@@ -84,11 +126,15 @@ def main() -> None:
     configure_logging(settings.log_level)
 
     server = create_server(settings)
-    logging.getLogger(__name__).info("Launching Hydra MCP server", extra={
-        "version": __version__,
-        "log_level": settings.log_level,
-        "chroma_path": str(settings.chroma_persist_path),
-    })
+    logging.getLogger(__name__).info(
+        "Launching Hydra MCP server",
+        extra={
+            "version": __version__,
+            "log_level": settings.log_level,
+            "chroma_path": str(settings.chroma_persist_path),
+            "codex_available": getattr(server, "codex_metadata", {}).get("available"),
+        },
+    )
     server.run()
 
 
