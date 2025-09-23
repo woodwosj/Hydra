@@ -64,7 +64,7 @@ class StubEvent:
     id: str
     session_id: str
     event_type: str
-    body: Any
+    document: str
     metadata: dict[str, Any]
     timestamp: datetime
 
@@ -82,11 +82,13 @@ class StubChromaStore:
         merged = metadata.copy()
         merged.setdefault("sequence", self._counter)
         merged.setdefault("timestamp", datetime.fromisoformat("2025-01-01T00:00:00+00:00").isoformat())
+        merged.setdefault("session_id", session_id)
+        document = body if isinstance(body, str) else str(body)
         event = StubEvent(
             id=f"{session_id}:{self._counter}",
             session_id=session_id,
             event_type=event_type,
-            body=body,
+            document=document,
             metadata=merged,
             timestamp=datetime.fromisoformat(merged["timestamp"]),
         )
@@ -98,6 +100,29 @@ class StubChromaStore:
         if limit is not None:
             filtered = filtered[:limit]
         return filtered
+
+    def search_events(
+        self,
+        query: str | None = None,
+        *,
+        filters: dict[str, Any] | None = None,
+        limit: int | None = None,
+    ) -> list[StubEvent]:
+        results = self.events
+        if filters:
+            for key, value in filters.items():
+                results = [event for event in results if event.metadata.get(key) == value]
+        if query:
+            needle = query.lower()
+            results = [
+                event
+                for event in results
+                if needle in event.document.lower()
+                or any(needle in str(val).lower() for val in event.metadata.values())
+            ]
+        if limit is not None:
+            results = results[:limit]
+        return results
 
 
 def _make_profile(profile_id: str = "generalist") -> AgentProfile:
@@ -196,3 +221,86 @@ def test_log_context_and_summarize() -> None:
     summary = handles.summarize_session.fn("generalist-1")  # type: ignore[attr-defined]
     assert summary["event_count"] == 2
     assert "timeline_preview" in summary
+
+
+def test_query_context_returns_match() -> None:
+    profile = _make_profile()
+    loader = StubProfileLoader(profile)
+    chroma = StubChromaStore()
+    chroma.record_event(
+        session_id="generalist-1",
+        event_type="note",
+        body="Investigate latency",
+        metadata={"sequence": 1, "topic": "latency"},
+    )
+    chroma.record_event(
+        session_id="generalist-1",
+        event_type="note",
+        body="Fix auth bug",
+        metadata={"sequence": 2, "topic": "auth"},
+    )
+
+    server = StubServer()
+    settings = HydraSettings()
+    handles = register_tools(
+        server,  # type: ignore[arg-type]
+        profiles=loader,
+        settings=settings,
+        codex_runner=None,
+        chroma_store=chroma,  # type: ignore[arg-type]
+    )
+
+    result = handles.query_context.fn("auth", session_id="generalist-1")  # type: ignore[attr-defined]
+    assert len(result["matches"]) == 1
+    assert result["matches"][0]["metadata"]["topic"] == "auth"
+
+
+def test_terminate_session_records_reason() -> None:
+    profile = _make_profile()
+    loader = StubProfileLoader(profile)
+    chroma = StubChromaStore()
+
+    server = StubServer()
+    settings = HydraSettings()
+    handles = register_tools(
+        server,  # type: ignore[arg-type]
+        profiles=loader,
+        settings=settings,
+        codex_runner=None,
+        chroma_store=chroma,  # type: ignore[arg-type]
+    )
+
+    result = asyncio.run(  # type: ignore[attr-defined]
+        handles.terminate_session.fn(  # type: ignore[attr-defined]
+            session_id="generalist-1",
+            reason="User cancelled",
+        )
+    )
+    assert result["reason"] == "User cancelled"
+    assert any(event.event_type == "terminate_session" for event in chroma.events)
+
+
+def test_export_session_markdown() -> None:
+    profile = _make_profile()
+    loader = StubProfileLoader(profile)
+    chroma = StubChromaStore()
+    chroma.record_event(
+        session_id="generalist-1",
+        event_type="note",
+        body="Initial note",
+        metadata={"sequence": 1},
+    )
+
+    server = StubServer()
+    settings = HydraSettings()
+    handles = register_tools(
+        server,  # type: ignore[arg-type]
+        profiles=loader,
+        settings=settings,
+        codex_runner=None,
+        chroma_store=chroma,  # type: ignore[arg-type]
+    )
+
+    export = handles.export_session.fn("generalist-1", format="markdown")  # type: ignore[attr-defined]
+    assert export["format"] == "markdown"
+    assert "Initial note" in export["data"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 from uuid import uuid4
 
 try:
@@ -24,6 +24,9 @@ class ToolHandles:
     list_agents: Any
     summarize_session: Any
     log_context: Any
+    query_context: Any
+    terminate_session: Any
+    export_session: Any
 
 
 def _build_prompt(profile: AgentProfile, task_brief: str, goalset: Iterable[str] | None) -> str:
@@ -244,11 +247,124 @@ def register_tools(
         description="Append a contextual note to a session, persisting to Chroma for downstream agents.",
     )(_log_context)
 
+    async def _terminate_session(
+        session_id: str,
+        reason: str | None = None,
+        context: Context | None = None,
+    ) -> dict[str, Any]:
+        """Record a termination event for a session."""
+
+        event_id = None
+        if chroma_store is not None:
+            event = chroma_store.record_event(
+                session_id=session_id,
+                event_type="terminate_session",
+                body={"reason": reason},
+                metadata={"reason": reason or "unspecified"},
+            )
+            event_id = event.id
+        if context is not None:
+            context.logger.warning(
+                "Termination requested",
+                extra={"session_id": session_id, "reason": reason},
+            )
+        return {"session_id": session_id, "reason": reason, "event_id": event_id}
+
+    def _query_context(
+        query: str,
+        *,
+        session_id: str | None = None,
+        limit: int = 10,
+        filters: dict[str, Any] | None = None,
+        context: Context | None = None,
+    ) -> dict[str, Any]:
+        """Search stored events by keyword."""
+
+        store = _require_chroma()
+        effective_filters = filters.copy() if filters else {}
+        if session_id:
+            effective_filters["session_id"] = session_id
+        matches = store.search_events(query, filters=effective_filters or None, limit=limit)
+        payload = [
+            {
+                "event_id": event.id,
+                "session_id": event.session_id,
+                "event_type": event.event_type,
+                "timestamp": event.timestamp.isoformat(),
+                "metadata": event.metadata,
+                "excerpt": event.document[:200],
+            }
+            for event in matches
+        ]
+        if context is not None:
+            context.logger.debug(
+                "Query context",
+                extra={"query": query, "results": len(payload)},
+            )
+        return {"matches": payload}
+
+    def _export_session(
+        session_id: str,
+        *,
+        format: Literal["json", "markdown"] = "json",
+        context: Context | None = None,
+    ) -> dict[str, Any]:
+        """Export a session timeline in the requested format."""
+
+        store = _require_chroma()
+        events = store.fetch_session_events(session_id)
+        if format == "json":
+            data = [
+                {
+                    "event_id": event.id,
+                    "event_type": event.event_type,
+                    "timestamp": event.timestamp.isoformat(),
+                    "document": event.document,
+                    "metadata": event.metadata,
+                }
+                for event in events
+            ]
+            payload = {"format": "json", "session_id": session_id, "data": data}
+        elif format == "markdown":
+            lines = [f"# Session {session_id}"]
+            for event in events:
+                lines.append(
+                    f"- {event.timestamp.isoformat()} [{event.event_type}] {event.document[:200]}"
+                )
+            payload = {"format": "markdown", "session_id": session_id, "data": "\n".join(lines)}
+        else:
+            raise ValueError("Unsupported export format. Use 'json' or 'markdown'.")
+
+        if context is not None:
+            context.logger.info(
+                "Exported session",
+                extra={"session_id": session_id, "format": format},
+            )
+        return payload
+
+    tool_query = server.tool(
+        name="query_context",
+        description="Search stored context and events using a keyword filter.",
+    )(_query_context)
+
+    tool_terminate = server.tool(
+        name="terminate_session",
+        description="Record a termination request for a session and log the reason.",
+    )(_terminate_session)
+
+    tool_export = server.tool(
+        name="export_session",
+        description="Export a session timeline as JSON or Markdown.",
+    )(_export_session)
+
     return ToolHandles(
         spawn_agent=tool_spawn,
         list_agents=tool_list,
         summarize_session=tool_summarize,
         log_context=tool_log,
+        query_context=tool_query,
+        terminate_session=tool_terminate,
+        export_session=tool_export,
     )
 
 

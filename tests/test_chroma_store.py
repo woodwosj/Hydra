@@ -84,3 +84,19 @@ def test_sequence_increments(tmp_path: Path) -> None:
     events = store.fetch_session_events("session-2")
     sequences = [event.metadata["sequence"] for event in events]
     assert sequences == [1, 2]
+
+
+
+def test_search_filters(tmp_path: Path) -> None:
+    store = ChromaStore(
+        tmp_path,
+        client_factory=lambda: StubClient(),
+        clock=lambda: datetime.fromisoformat("2025-01-01T00:00:00+00:00"),
+    )
+
+    store.record_event(session_id="sess", event_type="note", body="Investigate auth", metadata={"tags": ["auth"]})
+    store.record_event(session_id="sess", event_type="note", body="Fix logging", metadata={})
+
+    results = store.search_events("auth")
+    assert len(results) == 1
+    assert "auth" in results[0].document
