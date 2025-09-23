@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
+from .models import SessionTrackingRecord, WorktreeRecord
+
 class ChromaUnavailableError(RuntimeError):
     """Raised when the Chroma client cannot be constructed."""
 
@@ -164,6 +166,123 @@ class ChromaStore:
         collection = self._ensure_collection()
         result = collection.get(where={"session_id": session_id}, limit=limit)
         return self._convert_result(result)
+
+    def record_worktree(
+        self,
+        *,
+        task_id: str,
+        path: str,
+        branch: str | None,
+        status: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> WorktreeRecord:
+        timestamp = self._clock()
+        payload = {
+            "task_id": task_id,
+            "path": path,
+            "branch": branch,
+            "status": status,
+            "timestamp": timestamp.isoformat(),
+        }
+        if metadata:
+            payload.update(metadata)
+
+        event = self.record_event(
+            session_id=f"worktree::{task_id}",
+            event_type="worktree_update",
+            body=payload,
+            metadata={"task_id": task_id, "path": path, "status": status},
+        )
+
+        return WorktreeRecord(
+            task_id=task_id,
+            path=path,
+            branch=branch,
+            created_at=event.timestamp,
+            status=status,
+            metadata=metadata or {},
+        )
+
+    def list_worktrees(self, task_id: str | None = None) -> list[WorktreeRecord]:
+        filters = {"task_id": task_id} if task_id else None
+        events = self.search_events("worktree", filters=filters)
+        worktrees: list[WorktreeRecord] = []
+        for event in events:
+            doc = json.loads(event.document)
+            worktrees.append(
+                WorktreeRecord(
+                    task_id=doc["task_id"],
+                    path=doc["path"],
+                    branch=doc.get("branch"),
+                    created_at=event.timestamp,
+                    status=doc.get("status", "unknown"),
+                    metadata={k: v for k, v in doc.items() if k not in {"task_id", "path", "branch", "status", "timestamp"}},
+                )
+            )
+        return worktrees
+
+    def record_session_tracking(
+        self,
+        *,
+        session_id: str,
+        profile_id: str,
+        status: str,
+        task_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionTrackingRecord:
+        timestamp = self._clock()
+        payload = {
+            "session_id": session_id,
+            "profile_id": profile_id,
+            "task_id": task_id,
+            "status": status,
+            "timestamp": timestamp.isoformat(),
+        }
+        if metadata:
+            payload.update(metadata)
+
+        event = self.record_event(
+            session_id=f"session::{session_id}",
+            event_type="session_tracking",
+            body=payload,
+            metadata={
+                "session_id": session_id,
+                "profile_id": profile_id,
+                "task_id": task_id,
+                "status": status,
+            },
+        )
+
+        return SessionTrackingRecord(
+            session_id=session_id,
+            task_id=task_id,
+            profile_id=profile_id,
+            started_at=event.timestamp,
+            completed_at=None,
+            status=status,
+            metadata=metadata or {},
+        )
+
+    def list_session_tracking(self, task_id: str | None = None) -> list[SessionTrackingRecord]:
+        filters = {"task_id": task_id} if task_id else None
+        events = self.search_events(filters=filters, query=None)
+        sessions: list[SessionTrackingRecord] = []
+        for event in events:
+            if event.event_type != "session_tracking":
+                continue
+            doc = json.loads(event.document)
+            sessions.append(
+                SessionTrackingRecord(
+                    session_id=doc["session_id"],
+                    task_id=doc.get("task_id"),
+                    profile_id=doc["profile_id"],
+                    started_at=event.timestamp,
+                    completed_at=None,
+                    status=doc.get("status", "unknown"),
+                    metadata={k: v for k, v in doc.items() if k not in {"session_id", "profile_id", "task_id", "status", "timestamp"}},
+                )
+            )
+        return sessions
 
     def search_events(
         self,

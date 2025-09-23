@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from hydra_mcp.storage import ChromaEvent, ChromaStore
+from hydra_mcp.storage import ChromaEvent, ChromaStore, WorktreeRecord, SessionTrackingRecord
 
 
 @dataclass
@@ -100,3 +100,30 @@ def test_search_filters(tmp_path: Path) -> None:
     results = store.search_events("auth")
     assert len(results) == 1
     assert "auth" in results[0].document
+
+
+
+def test_worktree_recording(tmp_path: Path) -> None:
+    store = ChromaStore(
+        tmp_path,
+        client_factory=lambda: StubClient(),
+        clock=lambda: datetime.fromisoformat("2025-01-01T00:00:00+00:00"),
+    )
+
+    record = store.record_worktree(task_id="task1", path="/tmp/work", branch="feature", status="active")
+    assert isinstance(record, WorktreeRecord)
+    worktrees = store.list_worktrees("task1")
+    assert worktrees[0].path == "/tmp/work"
+
+
+def test_session_tracking(tmp_path: Path) -> None:
+    store = ChromaStore(
+        tmp_path,
+        client_factory=lambda: StubClient(),
+        clock=lambda: datetime.fromisoformat("2025-01-01T00:00:00+00:00"),
+    )
+
+    record = store.record_session_tracking(session_id="sess1", profile_id="generalist", status="running", task_id="task1")
+    assert isinstance(record, SessionTrackingRecord)
+    sessions = store.list_session_tracking("task1")
+    assert sessions[0].session_id == "sess1"
