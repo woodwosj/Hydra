@@ -93,6 +93,16 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
         ),
     )
 
+    handles = register_tools(
+        server,
+        profiles=profile_loader,
+        settings=settings,
+        codex_runner=codex_runner,
+        chroma_store=chroma_store,
+    )
+
+    tasks_state = handles.tasks_state
+
     @server.resource(
         "resource://hydra/status",
         name="hydra_status",
@@ -112,6 +122,11 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
             profile_ids = []
             profile_error = str(exc)
 
+        status_counts: dict[str, int] = {}
+        for task in tasks_state.values():
+            status = task.get("status", "unknown")
+            status_counts[status] = status_counts.get(status, 0) + 1
+
         payload = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "server_version": __version__,
@@ -129,23 +144,21 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
             "storage": {
                 "chroma": chroma_metadata,
             },
+            "tasks": {
+                "count": len(tasks_state),
+                "status_counts": status_counts,
+            },
             "request_id": getattr(context, "request_id", None),
         }
         return json.dumps(payload)
-
-    register_tools(
-        server,
-        profiles=profile_loader,
-        settings=settings,
-        codex_runner=codex_runner,
-        chroma_store=chroma_store,
-    )
 
     setattr(server, "profile_loader", profile_loader)
     setattr(server, "codex_runner", codex_runner)
     setattr(server, "codex_metadata", codex_metadata)
     setattr(server, "chroma_store", chroma_store)
     setattr(server, "chroma_metadata", chroma_metadata)
+    setattr(server, "tool_handles", handles)
+    setattr(server, "tasks_state", tasks_state)
     return server
 
 

@@ -31,6 +31,7 @@ class ToolHandles:
     start_task: Any
     task_status: Any
     complete_task: Any
+    tasks_state: dict[str, dict[str, Any]]
 
 
 def _build_prompt(profile: AgentProfile, task_brief: str, goalset: Iterable[str] | None) -> str:
@@ -533,6 +534,7 @@ def register_tools(
         start_task=tool_start_task,
         task_status=tool_task_status,
         complete_task=tool_complete_task,
+        tasks_state=tasks_state,
     )
 
 

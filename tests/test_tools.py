@@ -331,6 +331,7 @@ def test_task_lifecycle() -> None:
     )
 
     assert task["status"] == "pending"
+    assert len(handles.tasks_state) == 1
 
     start_result = asyncio.run(  # type: ignore[attr-defined]
         handles.start_task.fn(task_id=task["task_id"])  # type: ignore[attr-defined]
