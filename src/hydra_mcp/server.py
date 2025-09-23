@@ -15,6 +15,7 @@ from . import __version__
 from .codex import CodexNotFoundError, CodexRunner
 from .config import HydraSettings, get_settings
 from .profiles import ProfileLoadError, ProfileLoader
+from .storage import ChromaStore, ChromaUnavailableError
 
 
 def configure_logging(level: str) -> None:
@@ -65,6 +66,22 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
         codex_metadata["error"] = str(exc)
         codex_runner = None
 
+    chroma_store: ChromaStore | None = None
+    chroma_metadata = {
+        "available": False,
+        "path": str(settings.chroma_persist_path),
+        "collection": "hydra_runs",
+        "error": None,
+    }
+
+    try:
+        chroma_store = ChromaStore(settings.chroma_persist_path)
+        chroma_store.ping()
+        chroma_metadata["available"] = True
+    except ChromaUnavailableError as exc:
+        chroma_metadata["error"] = str(exc)
+        chroma_store = None
+
     server = FastMCP(
         name="Hydra MCP",
         version=__version__,
@@ -98,7 +115,6 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "server_version": __version__,
             "log_level": settings.log_level,
-            "chroma_path": str(settings.chroma_persist_path),
             "profiles": {
                 "count": len(profile_ids),
                 "ids": profile_ids,
@@ -109,6 +125,9 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
                 "default_model": settings.codex_default_model,
                 **codex_metadata,
             },
+            "storage": {
+                "chroma": chroma_metadata,
+            },
             "request_id": getattr(context, "request_id", None),
         }
         return json.dumps(payload)
@@ -116,6 +135,8 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
     setattr(server, "profile_loader", profile_loader)
     setattr(server, "codex_runner", codex_runner)
     setattr(server, "codex_metadata", codex_metadata)
+    setattr(server, "chroma_store", chroma_store)
+    setattr(server, "chroma_metadata", chroma_metadata)
     return server
 
 
@@ -131,8 +152,8 @@ def main() -> None:
         extra={
             "version": __version__,
             "log_level": settings.log_level,
-            "chroma_path": str(settings.chroma_persist_path),
             "codex_available": getattr(server, "codex_metadata", {}).get("available"),
+            "chroma_available": getattr(server, "chroma_metadata", {}).get("available"),
         },
     )
     server.run()

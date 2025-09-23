@@ -12,4 +12,4 @@ dist/
 .eggs/
 *.egg-info/
 .hydra/
-storage/
+/storage/
