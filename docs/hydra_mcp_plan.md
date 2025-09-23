@@ -131,3 +131,9 @@
 4. Week 4: Phases 8–12 (security hardening, CI/CD, docs, deployment artifacts).
 5. Ongoing: Phase 13 roadmap experimentation and user feedback loops.
 
+
+
+## 14. Supporting Artifacts
+- `docs/tool_catalog.md` – canonical tool descriptions with prompts and common use cases.
+- `docs/multiagent_workflow.md` – multi-agent development blueprint covering Conport manager, coder, and reviewer loops.
+

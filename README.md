@@ -21,3 +21,8 @@ headless agent sessions that share a persistent memory layer backed by ChromaDB.
 
 The server currently exposes a single health resource at `resource://hydra/status` while
 we build out Codex orchestration and Chroma persistence.
+
+## Documentation
+- Implementation roadmap: `docs/hydra_mcp_plan.md`
+- Tool catalog: `docs/tool_catalog.md`
+- Multi-agent workflow blueprint: `docs/multiagent_workflow.md`
