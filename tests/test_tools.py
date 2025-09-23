@@ -124,6 +124,55 @@ class StubChromaStore:
             results = results[:limit]
         return results
 
+    def record_worktree(
+        self,
+        *,
+        task_id: str,
+        path: str,
+        branch: str | None,
+        status: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        payload = {
+            "task_id": task_id,
+            "path": path,
+            "branch": branch,
+            "status": status,
+        }
+        if metadata:
+            payload.update(metadata)
+        self.record_event(
+            session_id=f"worktree::{task_id}",
+            event_type="worktree_update",
+            body=payload,
+            metadata={"task_id": task_id, "status": status},
+        )
+
+    def record_session_tracking(
+        self,
+        *,
+        session_id: str,
+        profile_id: str,
+        status: str,
+        task_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        payload = {
+            "session_id": session_id,
+            "profile_id": profile_id,
+            "task_id": task_id,
+            "status": status,
+        }
+        if metadata:
+            payload.update(metadata)
+        record_meta = {"session_id": session_id, "profile_id": profile_id, "task_id": task_id, "status": status}
+        self.record_event(
+            session_id=f"session::{session_id}",
+            event_type="session_tracking",
+            body=payload,
+            metadata=record_meta,
+        )
+
 
 def _make_profile(profile_id: str = "generalist") -> AgentProfile:
     return AgentProfile(
@@ -326,7 +375,7 @@ def test_task_lifecycle() -> None:
     task = handles.create_task.fn(  # type: ignore[attr-defined]
         profile_id="generalist",
         task_brief="Implement feature",
-        context_package={"files": ["src/app.py"]},
+        context_package={"files": ["src/app.py"], "worktree_path": "/tmp/work", "worktree_branch": "feature"},
         metadata={"priority": "high"},
     )
 
@@ -338,6 +387,7 @@ def test_task_lifecycle() -> None:
     )
     assert start_result["task"]["status"] == "running"
     assert runner.calls, "Codex runner should have been invoked"
+    assert any(event.event_type == "session_tracking" for event in chroma.events)
 
     status = handles.task_status.fn(task["task_id"])  # type: ignore[attr-defined]
     assert status["status"] == "running"
@@ -349,3 +399,4 @@ def test_task_lifecycle() -> None:
     )
     assert completed["status"] == "completed"
     assert any(event.event_type == "task_completed" for event in chroma.events)
+    assert any(event.event_type == "worktree_update" for event in chroma.events)

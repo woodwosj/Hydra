@@ -119,6 +119,12 @@ def register_tools(
                     "task_brief": task_brief[:2000],
                 },
             )
+            chroma_store.record_session_tracking(
+                session_id=session_id,
+                profile_id=profile.id,
+                status="running" if result.ok else "failed",
+                metadata={"returncode": result.returncode},
+            )
 
         if context is not None:
             context.logger.info(
@@ -456,6 +462,22 @@ def register_tools(
             {"status": "running", "session_id": task["session_id"], "flags": flags or []},
         )
 
+        if chroma_store is not None:
+            chroma_store.record_session_tracking(
+                session_id=task["session_id"],
+                profile_id=task["profile_id"],
+                status="running",
+                task_id=task_id,
+            )
+            worktree_path = task.get("context_package", {}).get("worktree_path")
+            if worktree_path:
+                chroma_store.record_worktree(
+                    task_id=task_id,
+                    path=worktree_path,
+                    branch=task.get("context_package", {}).get("worktree_branch"),
+                    status="active",
+                )
+
         return {
             "task": _task_summary(task),
             "spawn_result": result,
@@ -493,6 +515,23 @@ def register_tools(
             "task_completed",
             {"status": outcome_lower, "summary": summary},
         )
+
+        if chroma_store is not None and task.get("session_id"):
+            chroma_store.record_session_tracking(
+                session_id=task["session_id"],
+                profile_id=task["profile_id"],
+                status=outcome_lower,
+                task_id=task_id,
+                metadata={"summary": summary} if summary else None,
+            )
+            worktree_path = task.get("context_package", {}).get("worktree_path")
+            if worktree_path:
+                chroma_store.record_worktree(
+                    task_id=task_id,
+                    path=worktree_path,
+                    branch=task.get("context_package", {}).get("worktree_branch"),
+                    status="completed" if outcome_lower == "completed" else outcome_lower,
+                )
 
         if context is not None:
             context.logger.info(
