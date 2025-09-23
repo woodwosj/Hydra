@@ -127,6 +127,28 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
             status = task.get("status", "unknown")
             status_counts[status] = status_counts.get(status, 0) + 1
 
+        worktree_summary = []
+        session_summary = []
+        if chroma_store is not None:
+            recent_worktrees = chroma_store.list_worktrees()
+            worktree_summary = [
+                {
+                    "task_id": record.task_id,
+                    "path": record.path,
+                    "status": record.status,
+                }
+                for record in recent_worktrees[-5:]
+            ]
+            recent_sessions = chroma_store.list_session_tracking()
+            session_summary = [
+                {
+                    "session_id": record.session_id,
+                    "profile_id": record.profile_id,
+                    "status": record.status,
+                }
+                for record in recent_sessions[-5:]
+            ]
+
         payload = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "server_version": __version__,
@@ -143,6 +165,8 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
             },
             "storage": {
                 "chroma": chroma_metadata,
+                "worktrees_preview": worktree_summary,
+                "sessions_preview": session_summary,
             },
             "tasks": {
                 "count": len(tasks_state),
