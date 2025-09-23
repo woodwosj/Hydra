@@ -102,6 +102,9 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
     )
 
     tasks_state = handles.tasks_state
+    if chroma_store is not None and not tasks_state:
+        for replayed in chroma_store.replay_tasks():
+            tasks_state.setdefault(replayed["task_id"], replayed)
 
     @server.resource(
         "resource://hydra/status",

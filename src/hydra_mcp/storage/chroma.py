@@ -287,7 +287,11 @@ class ChromaStore:
     def replay_tasks(self) -> list[dict[str, Any]]:
         """Reconstruct task state from persisted events."""
 
-        created_events = self.search_events(query=None, filters={"event_type": "task_created"})
+        created_events = [
+            event
+            for event in self.search_events(query=None, filters=None)
+            if event.event_type == "task_created"
+        ]
         tasks: dict[str, dict[str, Any]] = {}
 
         for event in created_events:
