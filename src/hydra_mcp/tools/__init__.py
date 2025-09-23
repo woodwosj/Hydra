@@ -27,6 +27,10 @@ class ToolHandles:
     query_context: Any
     terminate_session: Any
     export_session: Any
+    create_task: Any
+    start_task: Any
+    task_status: Any
+    complete_task: Any
 
 
 def _build_prompt(profile: AgentProfile, task_brief: str, goalset: Iterable[str] | None) -> str:
@@ -57,6 +61,9 @@ def register_tools(
     chroma_store: ChromaStore | None,
 ) -> ToolHandles:
     """Register Hydra's MCP tools on the server."""
+
+    tasks_state: dict[str, dict[str, Any]] = {}
+    TASK_STATUSES = {"pending", "running", "completed", "cancelled", "failed"}
 
     async def _spawn_agent(
         profile_id: str,
@@ -357,6 +364,163 @@ def register_tools(
         description="Export a session timeline as JSON or Markdown.",
     )(_export_session)
 
+    def _task_summary(task: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "task_id": task["task_id"],
+            "profile_id": task["profile_id"],
+            "status": task["status"],
+            "created_at": task["created_at"],
+            "updated_at": task["updated_at"],
+            "session_id": task.get("session_id"),
+            "task_brief": task["task_brief"],
+            "metadata": task.get("metadata", {}),
+        }
+
+    def _record_task_event(task_id: str, event_type: str, payload: dict[str, Any]) -> None:
+        if chroma_store is None:
+            return
+        chroma_store.record_event(
+            session_id=f"task::{task_id}",
+            event_type=event_type,
+            body=payload,
+            metadata={
+                "task_id": task_id,
+                "status": payload.get("status"),
+                "event_type": event_type,
+            },
+        )
+
+    def _create_task(
+        profile_id: str,
+        task_brief: str,
+        *,
+        context_package: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        context: Context | None = None,
+    ) -> dict[str, Any]:
+        profile_map = profiles.load_all()
+        if profile_id not in profile_map:
+            raise ValueError(f"Unknown profile '{profile_id}'")
+
+        task_id = uuid4().hex
+        timestamp = datetime.now(timezone.utc).isoformat()
+        task = {
+            "task_id": task_id,
+            "profile_id": profile_id,
+            "task_brief": task_brief,
+            "status": "pending",
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "session_id": None,
+            "context_package": context_package or {},
+            "metadata": metadata or {},
+        }
+        tasks_state[task_id] = task
+
+        _record_task_event(task_id, "task_created", {"status": "pending", "task_brief": task_brief})
+
+        if context is not None:
+            context.logger.info("Created task", extra={"task_id": task_id, "profile_id": profile_id})
+
+        return _task_summary(task)
+
+    async def _start_task(
+        task_id: str,
+        *,
+        flags: list[str] | None = None,
+        context: Context | None = None,
+    ) -> dict[str, Any]:
+        if task_id not in tasks_state:
+            raise ValueError(f"Task '{task_id}' not found")
+        task = tasks_state[task_id]
+        if task["status"] not in {"pending", "queued"}:
+            raise ValueError(f"Task '{task_id}' is not in a startable state (current: {task['status']})")
+
+        result = await _spawn_agent(
+            profile_id=task["profile_id"],
+            task_brief=task["task_brief"],
+            goalset=None,
+            inputs=task.get("context_package"),
+            flags=flags,
+            context=context,
+        )
+
+        task["status"] = "running"
+        task["session_id"] = result["session_id"]
+        task["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        _record_task_event(
+            task_id,
+            "task_started",
+            {"status": "running", "session_id": task["session_id"], "flags": flags or []},
+        )
+
+        return {
+            "task": _task_summary(task),
+            "spawn_result": result,
+        }
+
+    def _task_status(task_id: str, context: Context | None = None) -> dict[str, Any]:
+        if task_id not in tasks_state:
+            raise ValueError(f"Task '{task_id}' not found")
+        task = tasks_state[task_id]
+        if context is not None:
+            context.logger.debug("Task status", extra={"task_id": task_id, "status": task["status"]})
+        return _task_summary(task)
+
+    def _complete_task(
+        task_id: str,
+        *,
+        outcome: str = "completed",
+        summary: str | None = None,
+        context: Context | None = None,
+    ) -> dict[str, Any]:
+        if task_id not in tasks_state:
+            raise ValueError(f"Task '{task_id}' not found")
+        outcome_lower = outcome.lower()
+        if outcome_lower not in TASK_STATUSES:
+            raise ValueError(f"Invalid outcome '{outcome}'. Must be one of {sorted(TASK_STATUSES)}")
+
+        task = tasks_state[task_id]
+        task["status"] = outcome_lower
+        task["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if summary:
+            task.setdefault("metadata", {})["summary"] = summary
+
+        _record_task_event(
+            task_id,
+            "task_completed",
+            {"status": outcome_lower, "summary": summary},
+        )
+
+        if context is not None:
+            context.logger.info(
+                "Task completed",
+                extra={"task_id": task_id, "status": outcome_lower},
+            )
+
+        return _task_summary(task)
+
+    tool_create_task = server.tool(
+        name="create_task",
+        description="Create a task for the multi-agent workflow and store context metadata.",
+    )(_create_task)
+
+    tool_start_task = server.tool(
+        name="start_task",
+        description="Start a pending task by spawning the associated agent profile.",
+    )(_start_task)
+
+    tool_task_status = server.tool(
+        name="task_status",
+        description="Fetch the latest status for a Hydra-managed task.",
+    )(_task_status)
+
+    tool_complete_task = server.tool(
+        name="complete_task",
+        description="Mark a task as completed, cancelled, or failed and store summary notes.",
+    )(_complete_task)
+
     return ToolHandles(
         spawn_agent=tool_spawn,
         list_agents=tool_list,
@@ -365,6 +529,10 @@ def register_tools(
         query_context=tool_query,
         terminate_session=tool_terminate,
         export_session=tool_export,
+        create_task=tool_create_task,
+        start_task=tool_start_task,
+        task_status=tool_task_status,
+        complete_task=tool_complete_task,
     )
 
 

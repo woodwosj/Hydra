@@ -304,3 +304,47 @@ def test_export_session_markdown() -> None:
     export = handles.export_session.fn("generalist-1", format="markdown")  # type: ignore[attr-defined]
     assert export["format"] == "markdown"
     assert "Initial note" in export["data"]
+
+
+def test_task_lifecycle() -> None:
+    profile = _make_profile()
+    loader = StubProfileLoader(profile)
+    chroma = StubChromaStore()
+    runner = StubCodexRunner()
+
+    server = StubServer()
+    settings = HydraSettings()
+    settings.codex_default_model = "gpt-test"
+    handles = register_tools(
+        server,  # type: ignore[arg-type]
+        profiles=loader,
+        settings=settings,
+        codex_runner=runner,
+        chroma_store=chroma,  # type: ignore[arg-type]
+    )
+
+    task = handles.create_task.fn(  # type: ignore[attr-defined]
+        profile_id="generalist",
+        task_brief="Implement feature",
+        context_package={"files": ["src/app.py"]},
+        metadata={"priority": "high"},
+    )
+
+    assert task["status"] == "pending"
+
+    start_result = asyncio.run(  # type: ignore[attr-defined]
+        handles.start_task.fn(task_id=task["task_id"])  # type: ignore[attr-defined]
+    )
+    assert start_result["task"]["status"] == "running"
+    assert runner.calls, "Codex runner should have been invoked"
+
+    status = handles.task_status.fn(task["task_id"])  # type: ignore[attr-defined]
+    assert status["status"] == "running"
+
+    completed = handles.complete_task.fn(  # type: ignore[attr-defined]
+        task["task_id"],
+        outcome="completed",
+        summary="All tests passing",
+    )
+    assert completed["status"] == "completed"
+    assert any(event.event_type == "task_completed" for event in chroma.events)
