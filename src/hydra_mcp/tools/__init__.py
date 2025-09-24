@@ -32,6 +32,8 @@ class ToolHandles:
     task_status: Any
     complete_task: Any
     tasks_state: dict[str, dict[str, Any]]
+    session_state: dict[str, dict[str, Any]]
+    worktree_state: dict[str, dict[str, Any]]
 
 
 def _build_prompt(profile: AgentProfile, task_brief: str, goalset: Iterable[str] | None) -> str:
@@ -64,11 +66,23 @@ def register_tools(
     """Register Hydra's MCP tools on the server."""
 
     tasks_state: dict[str, dict[str, Any]] = {}
+    session_map: dict[str, dict[str, Any]] = {}
+    worktree_map: dict[str, dict[str, Any]] = {}
     TASK_STATUSES = {"pending", "running", "completed", "cancelled", "failed"}
 
     if chroma_store is not None:
         for record in chroma_store.replay_tasks():
             tasks_state.setdefault(record["task_id"], record)
+        for session in chroma_store.list_session_tracking():
+            session_map[session.session_id] = {
+                "session_id": session.session_id,
+                "profile_id": session.profile_id,
+                "task_id": session.task_id,
+                "status": session.status,
+                "started_at": session.started_at.isoformat(),
+            }
+        for worktree in chroma_store.list_worktrees():
+            worktree_map.setdefault(worktree.task_id, worktree.__dict__)
 
     async def _spawn_agent(
         profile_id: str,
@@ -599,6 +613,8 @@ def register_tools(
         task_status=tool_task_status,
         complete_task=tool_complete_task,
         tasks_state=tasks_state,
+        session_state=session_map,
+        worktree_state=worktree_map,
     )
 
 

@@ -150,6 +150,29 @@ class StubChromaStore:
             metadata={"task_id": task_id, "status": status, "event_type": "worktree_update"},
         )
 
+    def list_worktrees(self, task_id: str | None = None):
+        records = []
+        for event in self.events:
+            if event.event_type != "worktree_update":
+                continue
+            if task_id and event.metadata.get("task_id") != task_id:
+                continue
+            doc = json.loads(event.document)
+            records.append(
+                type(
+                    "Worktree",
+                    (),
+                    {
+                        "task_id": doc["task_id"],
+                        "path": doc["path"],
+                        "branch": doc.get("branch"),
+                        "status": doc.get("status", "unknown"),
+                        "metadata": {k: v for k, v in doc.items() if k not in {"task_id", "path", "branch", "status", "timestamp"}},
+                    },
+                )()
+            )
+        return records
+
     def record_session_tracking(
         self,
         *,
@@ -180,6 +203,29 @@ class StubChromaStore:
             body=payload,
             metadata=record_meta,
         )
+
+    def list_session_tracking(self, task_id: str | None = None):
+        results = []
+        for event in self.events:
+            if event.event_type != "session_tracking":
+                continue
+            if task_id and event.metadata.get("task_id") != task_id:
+                continue
+            doc = json.loads(event.document)
+            results.append(
+                type(
+                    "Record",
+                    (),
+                    {
+                        "session_id": doc["session_id"],
+                        "profile_id": doc["profile_id"],
+                        "task_id": doc.get("task_id"),
+                        "status": doc.get("status", "unknown"),
+                        "started_at": event.timestamp,
+                    },
+                )()
+            )
+        return results
 
     def replay_tasks(self) -> list[dict[str, Any]]:
         tasks: dict[str, dict[str, Any]] = {}
