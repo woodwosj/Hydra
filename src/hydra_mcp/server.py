@@ -132,25 +132,29 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
 
         worktree_summary = []
         session_summary = []
+        storage_error = None
         if chroma_store is not None:
-            recent_worktrees = chroma_store.list_worktrees()
-            worktree_summary = [
-                {
-                    "task_id": record.task_id,
-                    "path": record.path,
-                    "status": record.status,
-                }
-                for record in recent_worktrees[-5:]
-            ]
-            recent_sessions = chroma_store.list_session_tracking()
-            session_summary = [
-                {
-                    "session_id": record.session_id,
-                    "profile_id": record.profile_id,
-                    "status": record.status,
-                }
-                for record in recent_sessions[-5:]
-            ]
+            try:
+                recent_worktrees = chroma_store.list_worktrees()
+                worktree_summary = [
+                    {
+                        "task_id": record.task_id,
+                        "path": record.path,
+                        "status": record.status,
+                    }
+                    for record in recent_worktrees[-5:]
+                ]
+                recent_sessions = chroma_store.list_session_tracking()
+                session_summary = [
+                    {
+                        "session_id": record.session_id,
+                        "profile_id": record.profile_id,
+                        "status": record.status,
+                    }
+                    for record in recent_sessions[-5:]
+                ]
+            except Exception as exc:  # defensive: avoid status failure
+                storage_error = str(exc)
 
         payload = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -170,6 +174,7 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
                 "chroma": chroma_metadata,
                 "worktrees_preview": worktree_summary,
                 "sessions_preview": session_summary,
+                "error": storage_error,
             },
             "tasks": {
                 "count": len(tasks_state),
