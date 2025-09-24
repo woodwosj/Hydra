@@ -104,6 +104,49 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
     tasks_state = handles.tasks_state
     session_state = getattr(handles, "session_state", {})
     worktree_state = getattr(handles, "worktree_state", {})
+    resume_actions: list[dict[str, Any]] = []
+
+    for task_id, task in list(tasks_state.items()):
+        if task.get("status") != "running":
+            continue
+
+        session_id = task.get("session_id")
+        action: dict[str, Any] = {
+            "task_id": task_id,
+            "session_id": session_id,
+        }
+
+        if codex_runner is not None and session_id and hasattr(codex_runner, "resume"):
+            try:
+                result = _run_sync(codex_runner.resume(session_id))
+                action.update(
+                    {
+                        "returncode": result.returncode,
+                        "stdout": result.stdout[:400],
+                        "status": "resumed" if result.ok else "resume_failed",
+                    }
+                )
+                if not result.ok:
+                    task["status"] = "queued"
+                    task["updated_at"] = datetime.now(timezone.utc).isoformat()
+            except Exception as exc:  # pragma: no cover - defensive
+                action.update({"status": "resume_error", "error": str(exc)})
+                task["status"] = "queued"
+                task["updated_at"] = datetime.now(timezone.utc).isoformat()
+        else:
+            action.update({"status": "resume_pending"})
+            task["status"] = "queued"
+            task["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        resume_actions.append(action)
+
+        if chroma_store is not None:
+            chroma_store.record_event(
+                session_id=f"task::{task_id}",
+                event_type="task_resume",
+                body=action,
+                metadata={"task_id": task_id, "status": action.get("status")},
+            )
 
     @server.resource(
         "resource://hydra/status",
@@ -180,6 +223,7 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
                 "status_counts": status_counts,
                 "sessions": list(session_state.values())[-5:],
                 "worktrees": list(worktree_state.values())[-5:],
+                "resume_actions": resume_actions[-5:],
             },
             "request_id": getattr(context, "request_id", None),
         }
@@ -190,6 +234,7 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
     setattr(server, "codex_metadata", codex_metadata)
     setattr(server, "chroma_store", chroma_store)
     setattr(server, "chroma_metadata", chroma_metadata)
+    setattr(server, "resume_actions", resume_actions)
     setattr(server, "tool_handles", handles)
     setattr(server, "tasks_state", tasks_state)
     return server

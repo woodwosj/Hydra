@@ -1,67 +1,78 @@
 # RESUMEWORK.md – Multi-Agent Orchestration Layer
 
 ## PROJECT STATUS SNAPSHOT
-### Last Updated: 2025-09-23T19:49:56Z
-### Session ID: hydra-session-20250923T194956Z
+### Last Updated: 2025-09-24T02:37:38Z
+### Session ID: hydra-session-20250924T023738Z
 ### Active Branch: main
 ### Workflow Stage: IMPLEMENTING
 
 ## EXECUTIVE SUMMARY
-Hydra MCP is in the implementation phase of its orchestration layer, focusing on end-to-end task, session, and worktree tracking. Core Codex integration and persistence features are in place, and we are now extending continuity across restarts. The critical path centers on persisting resumable state and tightening status surfaces; no blocking risks identified beyond upcoming data migration decisions.
+Hydra MCP remains in the implementation phase, now shipping diagnostics, replay hydration, and richer status reporting for the orchestration layer. Task/session/worktree state is persisted and auto-hydrated, while CLI tooling enables quick inspection of Chroma data. The critical path is finishing automatic task resume hooks and rounding out monitoring; no new blockers beyond the planned resume logic.
 
 ---
 
 ## COMPLETED WORK (Last 10 Items)
 ### Recently Completed ✅
-- [x] HYD-008: Wire tracking into task lifecycle
+- [x] **HYD-016:** Track session/worktree state in tool handles
+  - Completed: 2025-09-23
+  - Agent: Coder Implementation
+  - Commit: cc298d6
+  - Tests: `PYTHONPATH=src .venv/bin/pytest`
+  - Notes: Tool handles now retain replayed state for status previews.
+
+- [x] **HYD-015:** Regression test for diagnostics CLI
+  - Completed: 2025-09-23
+  - Agent: Coder Implementation
+  - Commit: d57f0f2
+  - Notes: Ensures CLI exits cleanly when Chroma unavailable.
+
+- [x] **HYD-014:** Document diagnostics usage
+  - Completed: 2025-09-23
+  - Agent: Coder Implementation
+  - Commit: c1c5882
+  - Notes: README now covers `hydra_diag.py` commands.
+
+- [x] **HYD-013:** Handle status errors when Chroma unavailable
+  - Completed: 2025-09-23
+  - Agent: Coder Implementation
+  - Commit: 6330415
+  - Notes: Status resource safely reports storage errors.
+
+- [x] **HYD-012:** Add Hydra diagnostics CLI
+  - Completed: 2025-09-23
+  - Agent: Coder Implementation
+  - Commit: b266b3c
+  - Notes: Introduced `scripts/hydra_diag.py` for task/worktree/session inspection.
+
+- [x] **HYD-011:** Hydrate tasks on server startup
+  - Completed: 2025-09-23
+  - Agent: Coder Implementation
+  - Commit: 0045ce3
+  - Notes: In-memory orchestration now repopulates from Chroma events.
+
+- [x] **HYD-010:** Track session/worktree state in tool handles *(supersedes HYD-008)*
+  - Completed: 2025-09-23
+  - Agent: Coder Implementation
+  - Commit: cc298d6
+  - Notes: Provides live previews and hydration metadata.
+
+- [x] **HYD-009:** Wire tracking into task lifecycle
   - Completed: 2025-09-23
   - Agent: Coder Implementation
   - Commit: 5dab035
-  - Tests: `PYTHONPATH=src .venv/bin/pytest`
-  - Notes: Session/worktree events emitted during task start/complete.
+  - Notes: Task events emit Chroma records on state changes.
 
-- [x] HYD-007: Expose tracking summaries in status endpoint
+- [x] **HYD-008:** Expose tracking summaries in status endpoint
   - Completed: 2025-09-23
   - Agent: Coder Implementation
   - Commit: 13d78ee
-  - Tests: `PYTHONPATH=src .venv/bin/pytest`
-  - Notes: Status now surfaces worktree/session previews.
+  - Notes: Status displays short previews of activity.
 
-- [x] HYD-006: Add worktree and session tracking persistence
+- [x] **HYD-007:** Add worktree and session tracking persistence
   - Completed: 2025-09-23
   - Agent: Coder Implementation
   - Commit: 94ffba6
-  - Notes: Chroma store now manages structured records.
-
-- [x] HYD-005: Implement task orchestration tools
-  - Completed: 2025-09-23
-  - Agent: Coder Implementation
-  - Commit: 1b1b110
-  - Notes: Created create/start/status/complete tool suite.
-
-- [x] HYD-004: Register Hydra MCP tools
-  - Completed: 2025-09-23
-  - Agent: Coder Implementation
-  - Commit: 07dfcc8
-  - Notes: Exposed spawn_agent, summarize_session, log_context, etc.
-
-- [x] HYD-003: Add Chroma persistence abstraction
-  - Completed: 2025-09-23
-  - Agent: Coder Implementation
-  - Commit: 708bd04
-  - Notes: Introduced ChromaStore with event sequencing.
-
-- [x] HYD-002: Add agent profile models and loader
-  - Completed: 2025-09-23
-  - Agent: Coder Implementation
-  - Commit: 00c119b
-  - Notes: YAML-backed profiles and validation in place.
-
-- [x] HYD-001: Scaffold Hydra MCP server
-  - Completed: 2025-09-23
-  - Agent: Coder Implementation
-  - Commit: aac9fca
-  - Notes: Project bootstrap, FastMCP skeleton.
+  - Notes: Chroma store manages structured records.
 
 ### Historical Milestones
 - Phase 0: Foundations (Completed 2025-09-23)
@@ -76,53 +87,48 @@ Hydra MCP is in the implementation phase of its orchestration layer, focusing on
 
 ## ACTIVE WORK IN PROGRESS
 ### Current Sprint/Iteration
-- **HYD-009**: Persist task/worktree state across restarts
-  - Status: IMPLEMENTING
-  - Assigned: Conport Manager → Coder Implementation (handoff pending)
-  - Context Package: CPK-2025-009
-  - Blocking: HYD-010 (status API polishing)
+- **HYD-017:** Auto-resume running tasks on startup
+  - Status: PLANNING → IMPLEMENTING
+  - Assigned: Conport Manager (context prep)
+  - Context Package: CPK-2025-017
+  - Blocking: None (depends on HYD-009 completion)
   - Review Iteration: N/A
 
 ### Parallel Tracks
-- Worktree 1: feature/orchestration-persistence – HYD-009
-- Worktree 2: feature/status-enhancements – HYD-010 (queued)
-- Merge Scheduled: 2025-09-25
+- Worktree 1: feature/auto-resume – HYD-017 (prep)
+- Worktree 2: feature/status-monitoring – HYD-018 (queued)
+- Merge Scheduled: 2025-09-26
 
 ---
 
 ## COMPREHENSIVE TODO CHECKLIST
 
 ### 🔴 CRITICAL PATH (Blocks other work)
-- [ ] HYD-009: Persist task + worktree state across restarts
+- [ ] HYD-017: Auto-resume running tasks on startup
   - Priority: P0
-  - Estimated: 6 hours
-  - Dependencies: Chroma event indexing
-  - Context Needed: Historical event replay strategy
+  - Estimated: 4 hours
+  - Dependencies: HYD-009 (completed)
+  - Context Needed: Replay hooks + session restart strategy
 
 ### 🟡 HIGH PRIORITY (Core features)
-- [ ] HYD-010: Expand status resource + REST surface for monitoring
+- [ ] HYD-018: Expand status & diagnostics endpoints
   - Priority: P1
-  - Dependencies: HYD-009
-  - Acceptance Criteria: Status exposes resumable counts & health check
-
-- [ ] HYD-011: Implement task auto-resume hooks on server startup
-  - Priority: P1
-  - Dependencies: HYD-009
-  - Acceptance Criteria: In-memory state repopulated from Chroma events
+  - Dependencies: HYD-017
+  - Acceptance Criteria: Status/CLI expose replay metrics and health check
 
 ### 🟢 STANDARD PRIORITY
-- [ ] HYD-012: Add CLI utilities for manual task management
-- [ ] HYD-013: Document multi-agent workflow in README & docs
+- [ ] HYD-019: Extend CLI for task filtering/resume triggers
+- [ ] HYD-020: Document multi-agent workflow in README/docs
 
 ### 🔵 BACKLOG (Nice to have)
-- [ ] HYD-014: Visualize task graph via web dashboard
-- [ ] HYD-015: Slack notifications for agent handoffs
+- [ ] HYD-021: Visualize task graph via web dashboard
+- [ ] HYD-022: Slack notifications for agent handoffs
 
 ### DEPENDENCY GRAPH
 ```
-HYD-009 → HYD-011
-HYD-009 → HYD-010 → HYD-012
-HYD-011 → HYD-013
+HYD-017 → HYD-018 → HYD-019
+HYD-017 → HYD-020
+
 ```
 
 ---
