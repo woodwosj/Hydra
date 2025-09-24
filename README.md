@@ -30,3 +30,5 @@ we build out Codex orchestration and Chroma persistence.
 ## Diagnostics
 - Run `PYTHONPATH=src .venv/bin/python scripts/hydra_diag.py tasks --json` to inspect persisted tasks (requires chromadb).
 - `scripts/hydra_diag.py worktrees` and `sessions` surface worktree/session tracking data.
+
+- Diagnostics metrics: `PYTHONPATH=src .venv/bin/python scripts/hydra_diag.py metrics` (requires chromadb).

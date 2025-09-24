@@ -44,6 +44,34 @@ def cmd_worktrees(args: argparse.Namespace) -> None:
     print(json.dumps([record.__dict__ for record in records], indent=2))
 
 
+
+
+def cmd_metrics(args: argparse.Namespace) -> None:
+    settings = HydraSettings()
+    store = load_store(settings)
+    try:
+        tasks = store.replay_tasks()
+        worktrees = store.list_worktrees()
+        sessions = store.list_session_tracking()
+    except ChromaUnavailableError as exc:
+        print(f"Chroma unavailable: {exc}")
+        raise SystemExit(1)
+
+    status_counts: dict[str, int] = {}
+    for task in tasks:
+        status = task.get("status", "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    metrics = {
+        "tasks_total": len(tasks),
+        "status_counts": status_counts,
+        "worktrees_total": len(worktrees),
+        "sessions_total": len(sessions),
+    }
+
+    print(json.dumps(metrics, indent=2))
+
+
 def cmd_sessions(args: argparse.Namespace) -> None:
     settings = HydraSettings()
     store = load_store(settings)
@@ -70,6 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_sessions = sub.add_parser("sessions", help="List session tracking records")
     p_sessions.add_argument("--task-id")
     p_sessions.set_defaults(func=cmd_sessions)
+
+    p_metrics = sub.add_parser("metrics", help="Show task/worktree/session counts")
+    p_metrics.set_defaults(func=cmd_metrics)
 
     return parser
 
