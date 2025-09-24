@@ -26,3 +26,7 @@ we build out Codex orchestration and Chroma persistence.
 - Implementation roadmap: `docs/hydra_mcp_plan.md`
 - Tool catalog: `docs/tool_catalog.md`
 - Multi-agent workflow blueprint: `docs/multiagent_workflow.md`
+
+## Diagnostics
+- Run `PYTHONPATH=src .venv/bin/python scripts/hydra_diag.py tasks --json` to inspect persisted tasks (requires chromadb).
+- `scripts/hydra_diag.py worktrees` and `sessions` surface worktree/session tracking data.
