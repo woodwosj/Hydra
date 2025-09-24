@@ -38,34 +38,47 @@ def _run_sync(coro):
         loop.close()
 
 
-def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
+def create_server(
+    settings: Optional[HydraSettings] = None,
+    codex_runner: "CodexRunner | None" = None,
+) -> FastMCP:
     """Instantiate the FastMCP server with baseline resources."""
 
     settings = settings or get_settings()
 
     profile_loader = ProfileLoader(settings.profile_paths)
 
-    codex_runner: CodexRunner | None = None
+    runner_provided = codex_runner is not None
     codex_metadata = {
         "available": False,
         "version": None,
         "error": None,
     }
 
-    try:
-        codex_runner = CodexRunner(Path(settings.codex_path) if settings.codex_path else None)
+    if not runner_provided:
+        try:
+            codex_runner = CodexRunner(Path(settings.codex_path) if settings.codex_path else None)
+            codex_metadata["available"] = True
+            version_result = _run_sync(codex_runner.version())
+            if version_result.ok:
+                codex_metadata["version"] = version_result.stdout.strip()
+            else:
+                codex_metadata["error"] = (
+                    version_result.stderr.strip()
+                    or "Codex version command failed with exit code"
+                )
+        except CodexNotFoundError as exc:
+            codex_metadata["error"] = str(exc)
+            codex_runner = None
+    else:
         codex_metadata["available"] = True
-        version_result = _run_sync(codex_runner.version())
-        if version_result.ok:
-            codex_metadata["version"] = version_result.stdout.strip()
-        else:
-            codex_metadata["error"] = (
-                version_result.stderr.strip()
-                or "Codex version command failed with exit code"
-            )
-    except CodexNotFoundError as exc:
-        codex_metadata["error"] = str(exc)
-        codex_runner = None
+        if hasattr(codex_runner, "version"):
+            try:
+                version_result = _run_sync(codex_runner.version())
+                if version_result.ok:
+                    codex_metadata["version"] = version_result.stdout.strip()
+            except Exception:  # pragma: no cover - best effort
+                pass
 
     chroma_store: ChromaStore | None = None
     chroma_metadata = {
@@ -126,7 +139,10 @@ def create_server(settings: Optional[HydraSettings] = None) -> FastMCP:
                         "status": "resumed" if result.ok else "resume_failed",
                     }
                 )
-                if not result.ok:
+                if result.ok:
+                    task["status"] = "running"
+                    task["updated_at"] = datetime.now(timezone.utc).isoformat()
+                else:
                     task["status"] = "queued"
                     task["updated_at"] = datetime.now(timezone.utc).isoformat()
             except Exception as exc:  # pragma: no cover - defensive
