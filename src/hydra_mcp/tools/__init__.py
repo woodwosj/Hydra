@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Literal
@@ -232,15 +233,16 @@ def register_tools(
                 stdout_preview=result.stdout[:500],
             )
 
-        if context is not None:
-            context.logger.info(
-                "Spawned agent",
-                extra={
-                    "session_id": session_id,
-                    "profile": profile.id,
-                    "returncode": result.returncode,
-                },
-            )
+        _emit_log(
+            context,
+            "info",
+            "Spawned agent",
+            extra={
+                "session_id": session_id,
+                "profile": profile.id,
+                "returncode": result.returncode,
+            },
+        )
 
         return {
             "session_id": session_id,
@@ -264,8 +266,7 @@ def register_tools(
             for profile in profile_map.values()
         ]
 
-        if context is not None:
-            context.logger.debug("Listing Hydra agent profiles", extra={"count": len(catalog)})
+        _emit_log(context, "debug", "Listing Hydra agent profiles", extra={"count": len(catalog)})
 
         return catalog
 
@@ -322,11 +323,12 @@ def register_tools(
         else:
             summary["timeline_preview"] = timeline[:5]
 
-        if context is not None:
-            context.logger.debug(
-                "Summarized session",
-                extra={"session_id": session_id, "event_count": len(events)},
-            )
+        _emit_log(
+            context,
+            "debug",
+            "Summarized session",
+            extra={"session_id": session_id, "event_count": len(events)},
+        )
 
         return summary
 
@@ -350,11 +352,12 @@ def register_tools(
             body={"title": title, "notes": notes, "tags": tags or []},
             metadata=merged_meta,
         )
-        if context is not None:
-            context.logger.info(
-                "Logged context note",
-                extra={"session_id": session_id, "event_id": event.id},
-            )
+        _emit_log(
+            context,
+            "info",
+            "Logged context note",
+            extra={"session_id": session_id, "event_id": event.id},
+        )
         return {"event_id": event.id, "timestamp": event.timestamp.isoformat()}
 
     tool_summarize = server.tool(
@@ -383,11 +386,12 @@ def register_tools(
                 metadata={"reason": reason or "unspecified"},
             )
             event_id = event.id
-        if context is not None:
-            context.logger.warning(
-                "Termination requested",
-                extra={"session_id": session_id, "reason": reason},
-            )
+        _emit_log(
+            context,
+            "warning",
+            "Termination requested",
+            extra={"session_id": session_id, "reason": reason},
+        )
         return {"session_id": session_id, "reason": reason, "event_id": event_id}
 
     def _query_context(
@@ -416,11 +420,12 @@ def register_tools(
             }
             for event in matches
         ]
-        if context is not None:
-            context.logger.debug(
-                "Query context",
-                extra={"query": query, "results": len(payload)},
-            )
+        _emit_log(
+            context,
+            "debug",
+            "Query context",
+            extra={"query": query, "results": len(payload)},
+        )
         return {"matches": payload}
 
     def _export_session(
@@ -455,11 +460,12 @@ def register_tools(
         else:
             raise ValueError("Unsupported export format. Use 'json' or 'markdown'.")
 
-        if context is not None:
-            context.logger.info(
-                "Exported session",
-                extra={"session_id": session_id, "format": format},
-            )
+        _emit_log(
+            context,
+            "info",
+            "Exported session",
+            extra={"session_id": session_id, "format": format},
+        )
         return payload
 
     tool_query = server.tool(
@@ -543,8 +549,12 @@ def register_tools(
             },
         )
 
-        if context is not None:
-            context.logger.info("Created task", extra={"task_id": task_id, "profile_id": profile_id})
+        _emit_log(
+            context,
+            "info",
+            "Created task",
+            extra={"task_id": task_id, "profile_id": profile_id},
+        )
 
         return _task_summary(task)
 
@@ -619,8 +629,12 @@ def register_tools(
         if task_id not in tasks_state:
             raise ValueError(f"Task '{task_id}' not found")
         task = tasks_state[task_id]
-        if context is not None:
-            context.logger.debug("Task status", extra={"task_id": task_id, "status": task["status"]})
+        _emit_log(
+            context,
+            "debug",
+            "Task status",
+            extra={"task_id": task_id, "status": task["status"]},
+        )
         return _task_summary(task)
 
     def _complete_task(
@@ -685,11 +699,12 @@ def register_tools(
             if summary:
                 session_entry.setdefault("metadata", {})["summary"] = summary
 
-        if context is not None:
-            context.logger.info(
-                "Task completed",
-                extra={"task_id": task_id, "status": outcome_lower},
-            )
+        _emit_log(
+            context,
+            "info",
+            "Task completed",
+            extra={"task_id": task_id, "status": outcome_lower},
+        )
 
         return _task_summary(task)
 
@@ -732,3 +747,35 @@ def register_tools(
 
 
 __all__ = ["register_tools", "ToolHandles"]
+
+logger = logging.getLogger(__name__)
+
+
+def _emit_log(
+    context: Context | None,
+    level: str,
+    message: str,
+    *,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Best-effort logging that prefers the MCP context logger when available."""
+
+    payload = extra or {}
+
+    if context is not None:
+        ctx_logger = getattr(context, "logger", None)
+        if ctx_logger is not None:
+            log_method = getattr(ctx_logger, level, None)
+            if callable(log_method):
+                log_method(message, extra=payload)
+                return
+        ctx_log = getattr(context, "log", None)
+        if callable(ctx_log):  # pragma: no cover - depends on FastMCP internals
+            try:
+                ctx_log(level.upper(), message, extra=payload)
+                return
+            except TypeError:
+                pass
+
+    fallback = getattr(logger, level, logger.info)
+    fallback(message, extra=payload)
