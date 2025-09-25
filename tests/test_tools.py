@@ -10,6 +10,7 @@ import json
 from hydra_mcp.codex.runner import CodexExecutionResult
 from hydra_mcp.config import HydraSettings
 from hydra_mcp.profiles import AgentProfile, ChecklistItem
+from hydra_mcp.storage import SessionTrackingRecord, WorktreeRecord
 from hydra_mcp.tools import register_tools
 
 
@@ -134,7 +135,7 @@ class StubChromaStore:
         branch: str | None,
         status: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> WorktreeRecord:
         payload = {
             "task_id": task_id,
             "path": path,
@@ -143,11 +144,24 @@ class StubChromaStore:
         }
         if metadata:
             payload.update(metadata)
-        self.record_event(
+        event = self.record_event(
             session_id=f"worktree::{task_id}",
             event_type="worktree_update",
             body=payload,
             metadata={"task_id": task_id, "status": status, "event_type": "worktree_update"},
+        )
+        extra_meta = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"task_id", "path", "branch", "status"}
+        }
+        return WorktreeRecord(
+            task_id=task_id,
+            path=path,
+            branch=branch,
+            created_at=event.timestamp,
+            status=status,
+            metadata=extra_meta,
         )
 
     def list_worktrees(self, task_id: str | None = None):
@@ -159,17 +173,18 @@ class StubChromaStore:
                 continue
             doc = json.loads(event.document)
             records.append(
-                type(
-                    "Worktree",
-                    (),
-                    {
-                        "task_id": doc["task_id"],
-                        "path": doc["path"],
-                        "branch": doc.get("branch"),
-                        "status": doc.get("status", "unknown"),
-                        "metadata": {k: v for k, v in doc.items() if k not in {"task_id", "path", "branch", "status", "timestamp"}},
+                WorktreeRecord(
+                    task_id=doc["task_id"],
+                    path=doc["path"],
+                    branch=doc.get("branch"),
+                    created_at=event.timestamp,
+                    status=doc.get("status", "unknown"),
+                    metadata={
+                        k: v
+                        for k, v in doc.items()
+                        if k not in {"task_id", "path", "branch", "status", "timestamp"}
                     },
-                )()
+                )
             )
         return records
 
@@ -181,7 +196,7 @@ class StubChromaStore:
         status: str,
         task_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> SessionTrackingRecord:
         payload = {
             "session_id": session_id,
             "profile_id": profile_id,
@@ -197,11 +212,25 @@ class StubChromaStore:
             "status": status,
             "event_type": "session_tracking",
         }
-        self.record_event(
+        event = self.record_event(
             session_id=f"session::{session_id}",
             event_type="session_tracking",
             body=payload,
             metadata=record_meta,
+        )
+        extra_meta = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"session_id", "profile_id", "task_id", "status"}
+        }
+        return SessionTrackingRecord(
+            session_id=session_id,
+            task_id=task_id,
+            profile_id=profile_id,
+            started_at=event.timestamp,
+            completed_at=None,
+            status=status,
+            metadata=extra_meta,
         )
 
     def list_session_tracking(self, task_id: str | None = None):
@@ -213,17 +242,19 @@ class StubChromaStore:
                 continue
             doc = json.loads(event.document)
             results.append(
-                type(
-                    "Record",
-                    (),
-                    {
-                        "session_id": doc["session_id"],
-                        "profile_id": doc["profile_id"],
-                        "task_id": doc.get("task_id"),
-                        "status": doc.get("status", "unknown"),
-                        "started_at": event.timestamp,
+                SessionTrackingRecord(
+                    session_id=doc["session_id"],
+                    task_id=doc.get("task_id"),
+                    profile_id=doc["profile_id"],
+                    started_at=event.timestamp,
+                    completed_at=None,
+                    status=doc.get("status", "unknown"),
+                    metadata={
+                        k: v
+                        for k, v in doc.items()
+                        if k not in {"session_id", "profile_id", "task_id", "status", "timestamp"}
                     },
-                )()
+                )
             )
         return results
 
@@ -251,55 +282,6 @@ class StubChromaStore:
                 "updated_at": latest.timestamp.isoformat(),
             }
         return list(tasks.values())
-
-    def record_worktree(
-        self,
-        *,
-        task_id: str,
-        path: str,
-        branch: str | None,
-        status: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        payload = {
-            "task_id": task_id,
-            "path": path,
-            "branch": branch,
-            "status": status,
-        }
-        if metadata:
-            payload.update(metadata)
-        self.record_event(
-            session_id=f"worktree::{task_id}",
-            event_type="worktree_update",
-            body=payload,
-            metadata={"task_id": task_id, "status": status},
-        )
-
-    def record_session_tracking(
-        self,
-        *,
-        session_id: str,
-        profile_id: str,
-        status: str,
-        task_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        payload = {
-            "session_id": session_id,
-            "profile_id": profile_id,
-            "task_id": task_id,
-            "status": status,
-        }
-        if metadata:
-            payload.update(metadata)
-        record_meta = {"session_id": session_id, "profile_id": profile_id, "task_id": task_id, "status": status}
-        self.record_event(
-            session_id=f"session::{session_id}",
-            event_type="session_tracking",
-            body=payload,
-            metadata=record_meta,
-        )
 
 
 def _make_profile(profile_id: str = "generalist") -> AgentProfile:
@@ -430,6 +412,86 @@ def test_query_context_returns_match() -> None:
     result = handles.query_context.fn("auth", session_id="generalist-1")  # type: ignore[attr-defined]
     assert len(result["matches"]) == 1
     assert result["matches"][0]["metadata"]["topic"] == "auth"
+
+
+def test_start_task_updates_session_and_worktree_state() -> None:
+    profile = _make_profile()
+    loader = StubProfileLoader(profile)
+    chroma = StubChromaStore()
+    runner = StubCodexRunner()
+
+    server = StubServer()
+    settings = HydraSettings()
+    handles = register_tools(
+        server,  # type: ignore[arg-type]
+        profiles=loader,
+        settings=settings,
+        codex_runner=runner,
+        chroma_store=chroma,  # type: ignore[arg-type]
+    )
+
+    task = handles.create_task.fn(  # type: ignore[attr-defined]
+        profile_id="generalist",
+        task_brief="Investigate issue",
+        context_package={"worktree_path": "/tmp/worktree", "worktree_branch": "feature/test"},
+    )
+
+    start_result = asyncio.run(
+        handles.start_task.fn(  # type: ignore[attr-defined]
+            task_id=task["task_id"],
+        )
+    )
+
+    session_id = start_result["task"]["session_id"]
+    session_snapshot = handles.session_state[session_id]
+    worktree_snapshot = handles.worktree_state[task["task_id"]]
+
+    assert session_snapshot["status"] == "running"
+    assert session_snapshot["task_id"] == task["task_id"]
+    assert session_snapshot.get("returncode") == 0
+    assert "stdout_preview" in session_snapshot
+    assert worktree_snapshot["status"] == "active"
+    assert worktree_snapshot["path"] == "/tmp/worktree"
+
+
+def test_complete_task_updates_session_state_summary() -> None:
+    profile = _make_profile()
+    loader = StubProfileLoader(profile)
+    chroma = StubChromaStore()
+    runner = StubCodexRunner()
+
+    server = StubServer()
+    settings = HydraSettings()
+    handles = register_tools(
+        server,  # type: ignore[arg-type]
+        profiles=loader,
+        settings=settings,
+        codex_runner=runner,
+        chroma_store=chroma,  # type: ignore[arg-type]
+    )
+
+    task = handles.create_task.fn(  # type: ignore[attr-defined]
+        profile_id="generalist",
+        task_brief="Investigate issue",
+    )
+    asyncio.run(
+        handles.start_task.fn(  # type: ignore[attr-defined]
+            task_id=task["task_id"],
+        )
+    )
+
+    summary_text = "All clear"
+    handles.complete_task.fn(  # type: ignore[attr-defined]
+        task_id=task["task_id"],
+        outcome="completed",
+        summary=summary_text,
+    )
+
+    session_id = handles.tasks_state[task["task_id"]]["session_id"]
+    session_snapshot = handles.session_state[session_id]
+
+    assert session_snapshot["status"] == "completed"
+    assert summary_text == session_snapshot["metadata"].get("summary")
 
 
 def test_terminate_session_records_reason() -> None:

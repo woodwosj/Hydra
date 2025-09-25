@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover - fallback for limited test environments
 from ..codex import CodexExecutionResult, CodexRunner
 from ..config import HydraSettings
 from ..profiles import AgentProfile, ProfileLoader
-from ..storage import ChromaStore
+from ..storage import ChromaStore, WorktreeRecord
 
 
 @dataclass(slots=True)
@@ -70,19 +70,87 @@ def register_tools(
     worktree_map: dict[str, dict[str, Any]] = {}
     TASK_STATUSES = {"pending", "running", "completed", "cancelled", "failed"}
 
+    def _store_session_snapshot(
+        *,
+        session_id: str,
+        profile_id: str,
+        status: str,
+        task_id: str | None = None,
+        started_at: datetime | None = None,
+        metadata: dict[str, Any] | None = None,
+        returncode: int | None = None,
+        stdout_preview: str | None = None,
+    ) -> dict[str, Any]:
+        existing = session_map.get(session_id)
+        started_iso = (
+            (started_at or datetime.now(timezone.utc)).isoformat()
+            if started_at is not None or existing is None
+            else existing.get("started_at", datetime.now(timezone.utc).isoformat())
+        )
+
+        snapshot: dict[str, Any] = {
+            "session_id": session_id,
+            "profile_id": profile_id,
+            "task_id": task_id,
+            "status": status,
+            "started_at": started_iso,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        merged_metadata: dict[str, Any] | None = None
+        if existing and "metadata" in existing:
+            merged_metadata = dict(existing["metadata"] or {})
+        if metadata:
+            merged_metadata = {**(merged_metadata or {}), **metadata}
+        if merged_metadata:
+            snapshot["metadata"] = merged_metadata
+
+        if returncode is not None:
+            snapshot["returncode"] = returncode
+        elif existing and "returncode" in existing:
+            snapshot["returncode"] = existing["returncode"]
+        if stdout_preview is not None:
+            snapshot["stdout_preview"] = stdout_preview
+        elif existing and "stdout_preview" in existing:
+            snapshot["stdout_preview"] = existing["stdout_preview"]
+
+        session_map[session_id] = snapshot
+        return snapshot
+
+    def _store_worktree_snapshot(record: WorktreeRecord | dict[str, Any]) -> dict[str, Any]:
+        if isinstance(record, dict):
+            payload = dict(record)
+            task_id = payload.get("task_id")
+            if task_id is None:
+                return payload
+            worktree_map[task_id] = payload
+            return payload
+
+        payload = {
+            "task_id": record.task_id,
+            "path": record.path,
+            "branch": record.branch,
+            "status": record.status,
+            "created_at": record.created_at.isoformat(),
+            "metadata": record.metadata,
+        }
+        worktree_map[record.task_id] = payload
+        return payload
+
     if chroma_store is not None:
         for record in chroma_store.replay_tasks():
             tasks_state.setdefault(record["task_id"], record)
         for session in chroma_store.list_session_tracking():
-            session_map[session.session_id] = {
-                "session_id": session.session_id,
-                "profile_id": session.profile_id,
-                "task_id": session.task_id,
-                "status": session.status,
-                "started_at": session.started_at.isoformat(),
-            }
+            _store_session_snapshot(
+                session_id=session.session_id,
+                profile_id=session.profile_id,
+                task_id=session.task_id,
+                status=session.status,
+                started_at=session.started_at,
+                metadata=session.metadata,
+            )
         for worktree in chroma_store.list_worktrees():
-            worktree_map.setdefault(worktree.task_id, worktree.__dict__)
+            _store_worktree_snapshot(worktree)
 
     async def _spawn_agent(
         profile_id: str,
@@ -92,6 +160,7 @@ def register_tools(
         inputs: dict[str, Any] | None = None,
         flags: list[str] | None = None,
         context: Context | None = None,
+        task_id: str | None = None,
     ) -> dict[str, Any]:
         """Spawn a Codex agent session with the given profile and task brief."""
 
@@ -126,6 +195,15 @@ def register_tools(
             "inputs": inputs or {},
         }
 
+        _store_session_snapshot(
+            session_id=session_id,
+            profile_id=profile.id,
+            task_id=task_id,
+            status="running" if result.ok else "failed",
+            returncode=result.returncode,
+            stdout_preview=result.stdout[:500],
+        )
+
         if chroma_store is not None:
             chroma_store.record_event(
                 session_id=session_id,
@@ -137,11 +215,21 @@ def register_tools(
                     "task_brief": task_brief[:2000],
                 },
             )
-            chroma_store.record_session_tracking(
+            tracking_record = chroma_store.record_session_tracking(
                 session_id=session_id,
                 profile_id=profile.id,
                 status="running" if result.ok else "failed",
                 metadata={"returncode": result.returncode},
+            )
+            _store_session_snapshot(
+                session_id=session_id,
+                profile_id=profile.id,
+                task_id=task_id,
+                status=tracking_record.status,
+                started_at=tracking_record.started_at,
+                metadata=tracking_record.metadata,
+                returncode=result.returncode,
+                stdout_preview=result.stdout[:500],
             )
 
         if context is not None:
@@ -479,6 +567,7 @@ def register_tools(
             inputs=task.get("context_package"),
             flags=flags,
             context=context,
+            task_id=task_id,
         )
 
         task["status"] = "running"
@@ -497,20 +586,29 @@ def register_tools(
         )
 
         if chroma_store is not None:
-            chroma_store.record_session_tracking(
+            tracking_record = chroma_store.record_session_tracking(
                 session_id=task["session_id"],
                 profile_id=task["profile_id"],
                 status="running",
                 task_id=task_id,
             )
+            _store_session_snapshot(
+                session_id=tracking_record.session_id,
+                profile_id=tracking_record.profile_id,
+                task_id=tracking_record.task_id,
+                status=tracking_record.status,
+                metadata=tracking_record.metadata,
+                started_at=tracking_record.started_at,
+            )
             worktree_path = task.get("context_package", {}).get("worktree_path")
             if worktree_path:
-                chroma_store.record_worktree(
+                worktree_record = chroma_store.record_worktree(
                     task_id=task_id,
                     path=worktree_path,
                     branch=task.get("context_package", {}).get("worktree_branch"),
                     status="active",
                 )
+                _store_worktree_snapshot(worktree_record)
 
         return {
             "task": _task_summary(task),
@@ -556,21 +654,36 @@ def register_tools(
         )
 
         if chroma_store is not None and task.get("session_id"):
-            chroma_store.record_session_tracking(
+            tracking_record = chroma_store.record_session_tracking(
                 session_id=task["session_id"],
                 profile_id=task["profile_id"],
                 status=outcome_lower,
                 task_id=task_id,
                 metadata={"summary": summary} if summary else None,
             )
+            _store_session_snapshot(
+                session_id=tracking_record.session_id,
+                profile_id=tracking_record.profile_id,
+                task_id=tracking_record.task_id,
+                status=tracking_record.status,
+                metadata=tracking_record.metadata,
+            )
             worktree_path = task.get("context_package", {}).get("worktree_path")
             if worktree_path:
-                chroma_store.record_worktree(
+                worktree_record = chroma_store.record_worktree(
                     task_id=task_id,
                     path=worktree_path,
                     branch=task.get("context_package", {}).get("worktree_branch"),
                     status="completed" if outcome_lower == "completed" else outcome_lower,
                 )
+                _store_worktree_snapshot(worktree_record)
+
+        if task.get("session_id") and task["session_id"] in session_map:
+            session_entry = session_map[task["session_id"]]
+            session_entry["status"] = outcome_lower
+            session_entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+            if summary:
+                session_entry.setdefault("metadata", {})["summary"] = summary
 
         if context is not None:
             context.logger.info(

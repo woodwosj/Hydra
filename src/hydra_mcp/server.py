@@ -1,13 +1,11 @@
 """FastMCP server bootstrap for Hydra."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastmcp import Context, FastMCP
 
@@ -40,7 +38,7 @@ def _run_sync(coro):
 
 def create_server(
     settings: Optional[HydraSettings] = None,
-    codex_runner: "CodexRunner | None" = None,
+    codex_runner: CodexRunner | None = None,
 ) -> FastMCP:
     """Instantiate the FastMCP server with baseline resources."""
 
@@ -118,15 +116,17 @@ def create_server(
     session_state = getattr(handles, "session_state", {})
     worktree_state = getattr(handles, "worktree_state", {})
     resume_actions: list[dict[str, Any]] = []
-
+    alert_threshold = getattr(settings, "resume_alert_threshold", 3)
     for task_id, task in list(tasks_state.items()):
         if task.get("status") != "running":
             continue
 
         session_id = task.get("session_id")
+        failure_count = int(task.get("resume_failure_count", 0) or 0)
         action: dict[str, Any] = {
             "task_id": task_id,
             "session_id": session_id,
+            "attempted_at": datetime.now(timezone.utc).isoformat(),
         }
 
         if codex_runner is not None and session_id and hasattr(codex_runner, "resume"):
@@ -142,17 +142,36 @@ def create_server(
                 if result.ok:
                     task["status"] = "running"
                     task["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    failure_count = 0
                 else:
                     task["status"] = "queued"
                     task["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    failure_count += 1
             except Exception as exc:  # pragma: no cover - defensive
                 action.update({"status": "resume_error", "error": str(exc)})
                 task["status"] = "queued"
                 task["updated_at"] = datetime.now(timezone.utc).isoformat()
+                failure_count += 1
         else:
             action.update({"status": "resume_pending"})
             task["status"] = "queued"
             task["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        task["resume_failure_count"] = failure_count
+        task["last_resume_attempt_at"] = action["attempted_at"]
+        if failure_count:
+            action["failure_count"] = failure_count
+
+        if failure_count and failure_count >= alert_threshold:
+            logging.getLogger(__name__).warning(
+                "Resume failures exceeded threshold",
+                extra={
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "failure_count": failure_count,
+                    "threshold": alert_threshold,
+                },
+            )
 
         resume_actions.append(action)
 
@@ -161,8 +180,34 @@ def create_server(
                 session_id=f"task::{task_id}",
                 event_type="task_resume",
                 body=action,
-                metadata={"task_id": task_id, "status": action.get("status")},
+                metadata={
+                    "task_id": task_id,
+                    "status": task.get("status"),
+                    "resume_status": action.get("status"),
+                    "failure_count": failure_count,
+                    "alert_threshold": alert_threshold,
+                },
             )
+
+            if failure_count and failure_count >= alert_threshold:
+                chroma_store.record_event(
+                    session_id=f"task::{task_id}",
+                    event_type="resume_alert",
+                    body={
+                        "task_id": task_id,
+                        "session_id": session_id,
+                        "failure_count": failure_count,
+                        "threshold": alert_threshold,
+                        "attempted_at": action["attempted_at"],
+                    },
+                    metadata={
+                        "task_id": task_id,
+                        "session_id": session_id,
+                        "failure_count": failure_count,
+                        "threshold": alert_threshold,
+                        "resume_status": action.get("status"),
+                    },
+                )
 
     @server.resource(
         "resource://hydra/status",
@@ -187,6 +232,23 @@ def create_server(
         for task in tasks_state.values():
             status = task.get("status", "unknown")
             status_counts[status] = status_counts.get(status, 0) + 1
+
+        resume_status_counts: dict[str, int] = {}
+        for action in resume_actions:
+            resume_status = action.get("status", "unknown")
+            resume_status_counts[resume_status] = resume_status_counts.get(resume_status, 0) + 1
+
+        alert_threshold = getattr(settings, "resume_alert_threshold", 3)
+        resume_alerts = [
+            {
+                "task_id": task_id,
+                "session_id": task.get("session_id"),
+                "failure_count": task.get("resume_failure_count", 0),
+                "last_attempt": task.get("last_resume_attempt_at"),
+            }
+            for task_id, task in tasks_state.items()
+            if task.get("resume_failure_count", 0) >= alert_threshold
+        ]
 
         worktree_summary = []
         session_summary = []
@@ -240,6 +302,14 @@ def create_server(
                 "sessions": list(session_state.values())[-5:],
                 "worktrees": list(worktree_state.values())[-5:],
                 "resume_actions": resume_actions[-5:],
+                "resume_metrics": {
+                    "attempts": len(resume_actions),
+                    "by_status": resume_status_counts,
+                    "threshold": alert_threshold,
+                    "alerts": resume_alerts,
+                    "active_alert_count": len(resume_alerts),
+                    "most_recent_alert": resume_alerts[-1] if resume_alerts else None,
+                },
             },
             "request_id": getattr(context, "request_id", None),
         }

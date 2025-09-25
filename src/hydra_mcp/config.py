@@ -24,6 +24,9 @@ class HydraSettings(BaseSettings):
         default=(Path("profiles"),), validation_alias="HYDRA_PROFILE_PATHS"
     )
     log_level: str = Field(default="INFO", validation_alias="HYDRA_LOG_LEVEL")
+    resume_alert_threshold: int = Field(
+        default=3, validation_alias="HYDRA_RESUME_ALERT_THRESHOLD"
+    )
 
     @field_validator("log_level")
     @classmethod
@@ -46,6 +49,13 @@ class HydraSettings(BaseSettings):
             parts = [part.strip() for part in value.split(os.pathsep) if part.strip()]
             return tuple(Path(part) for part in parts) or (Path("profiles"),)
         raise TypeError("HYDRA_PROFILE_PATHS must be a list of paths or a path-separated string")
+
+    @field_validator("resume_alert_threshold")
+    @classmethod
+    def _validate_resume_alert_threshold(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("HYDRA_RESUME_ALERT_THRESHOLD must be >= 1")
+        return value
 
 
 @lru_cache(maxsize=1)

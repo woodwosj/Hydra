@@ -33,6 +33,8 @@ document using the research pack from Conport.`
 - **Arguments**: `session_id` *(string, required)*, `detail_level` *(enum: brief|full)*.
 - **Response**: JSON summary including checklist completion, major actions, open risks.
 - **Example prompt**: `Summarize session hydra-2025-002 with a focus on outstanding TODOs.`
+- **Alerts**: Use `hydra_diag alerts --task-id task-123 --limit 5` to list the latest resume alert events (failures that hit alert thresholds) for a specific task; omit `--task-id` to review all alerts. Combine with `metrics` for aggregate counts. See `docs/resume_alert_monitoring.md` for forwarder and validation workflow.
+- **Forward Alerts**: Run `python scripts/hydra_alert_forwarder.py --format text --limit 5 --output alerts.log` to emit the latest alert summaries to a log/file for downstream monitoring jobs.
 - **Typical use cases**:
   - Reviewer agent gathering context prior to assessment.
   - Managers compiling daily reports of active efforts.

@@ -127,3 +127,40 @@ def test_session_tracking(tmp_path: Path) -> None:
     assert isinstance(record, SessionTrackingRecord)
     sessions = store.list_session_tracking("task1")
     assert sessions[0].session_id == "sess1"
+
+
+def test_replay_tasks_uses_canonical_status(tmp_path: Path) -> None:
+    store = ChromaStore(
+        tmp_path,
+        client_factory=lambda: StubClient(),
+        clock=lambda: datetime.fromisoformat("2025-01-01T00:00:00+00:00"),
+    )
+
+    store.record_event(
+        session_id="task::task-1",
+        event_type="task_created",
+        body={
+            "task_id": "task-1",
+            "profile_id": "generalist",
+            "task_brief": "Investigate",
+            "status": "pending",
+            "context_package": {},
+            "metadata": {},
+        },
+        metadata={"task_id": "task-1", "status": "pending"},
+    )
+
+    store.record_event(
+        session_id="task::task-1",
+        event_type="task_resume",
+        body={
+            "task_id": "task-1",
+            "session_id": "sess-1",
+            "status": "resume_failed",
+            "attempted_at": "2025-01-01T00:01:00+00:00",
+        },
+        metadata={"task_id": "task-1", "status": "queued", "resume_status": "resume_failed"},
+    )
+
+    tasks = store.replay_tasks()
+    assert tasks[0]["status"] == "queued"

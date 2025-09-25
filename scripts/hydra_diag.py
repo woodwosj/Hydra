@@ -53,6 +53,7 @@ def cmd_metrics(args: argparse.Namespace) -> None:
         tasks = store.replay_tasks()
         worktrees = store.list_worktrees()
         sessions = store.list_session_tracking()
+        resume_events = store.search_events(filters={"event_type": "task_resume"})
     except ChromaUnavailableError as exc:
         print(f"Chroma unavailable: {exc}")
         raise SystemExit(1)
@@ -62,11 +63,33 @@ def cmd_metrics(args: argparse.Namespace) -> None:
         status = task.get("status", "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
 
+    resume_counts: dict[str, int] = {}
+    failure_counts: dict[str, int] = {}
+    failure_statuses = {"resume_failed", "resume_error"}
+    for event in resume_events:
+        status = event.metadata.get("resume_status") or event.metadata.get("status") or "unknown"
+        resume_counts[status] = resume_counts.get(status, 0) + 1
+        if status in failure_statuses:
+            task_id = event.metadata.get("task_id")
+            if task_id:
+                failure_counts[task_id] = failure_counts.get(task_id, 0) + 1
+
+    alert_threshold = settings.resume_alert_threshold
+    resume_alerts = [
+        {"task_id": task_id, "failure_count": count}
+        for task_id, count in failure_counts.items()
+        if count >= alert_threshold
+    ]
+
     metrics = {
         "tasks_total": len(tasks),
         "status_counts": status_counts,
         "worktrees_total": len(worktrees),
         "sessions_total": len(sessions),
+        "resume_attempts": len(resume_events),
+        "resume_status_counts": resume_counts,
+        "resume_alert_threshold": alert_threshold,
+        "resume_failure_alerts": resume_alerts,
     }
 
     print(json.dumps(metrics, indent=2))
@@ -81,6 +104,38 @@ def cmd_sessions(args: argparse.Namespace) -> None:
         print(f"Chroma unavailable: {exc}")
         raise SystemExit(1)
     print(json.dumps([record.__dict__ for record in records], indent=2))
+
+
+def cmd_alerts(args: argparse.Namespace) -> None:
+    settings = HydraSettings()
+    store = load_store(settings)
+    try:
+        alerts = store.search_events(filters={"event_type": "resume_alert"})
+    except ChromaUnavailableError as exc:
+        print(f"Chroma unavailable: {exc}")
+        raise SystemExit(1)
+
+    task_id = args.task_id
+    if task_id:
+        alerts = [event for event in alerts if event.metadata.get("task_id") == task_id]
+
+    alerts.sort(key=lambda event: event.timestamp)
+    if args.limit is not None and args.limit > 0:
+        alerts = alerts[-args.limit :]
+
+    payload = [
+        {
+            "event_id": getattr(event, "id", None),
+            "task_id": event.metadata.get("task_id"),
+            "session_id": event.metadata.get("session_id"),
+            "failure_count": event.metadata.get("failure_count"),
+            "threshold": event.metadata.get("threshold"),
+            "resume_status": event.metadata.get("resume_status"),
+            "timestamp": event.timestamp.isoformat(),
+        }
+        for event in alerts
+    ]
+    print(json.dumps(payload, indent=2))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -101,6 +156,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_metrics = sub.add_parser("metrics", help="Show task/worktree/session counts")
     p_metrics.set_defaults(func=cmd_metrics)
+
+    p_alerts = sub.add_parser(
+        "alerts",
+        help="List resume alert events (failure threshold breaches)",
+    )
+    p_alerts.add_argument("--task-id")
+    p_alerts.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="If provided, show only the latest N alerts",
+    )
+    p_alerts.set_defaults(func=cmd_alerts)
 
     return parser
 

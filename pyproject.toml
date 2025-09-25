@@ -8,11 +8,11 @@ version = "0.1.0"
 description = "Hydra MCP server enabling Codex agent orchestration with Chroma-backed memory."
 readme = "README.md"
 authors = [{name = "Hydra Team"}]
-license = {text = "Proprietary"}
+license = {file = "LICENSE"}
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
 dependencies = [
